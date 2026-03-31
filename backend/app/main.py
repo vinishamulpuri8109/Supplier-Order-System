@@ -1,0 +1,80 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+import os
+from dotenv import load_dotenv
+from app.db.database import Base, engine
+from app.models.models import SupplierOrder
+
+# Load environment variables
+load_dotenv()
+
+# Create FastAPI app
+app = FastAPI(
+    title="Supplier Order Automation System",
+    description="API for managing supplier orders",
+    version="1.0.0"
+)
+
+# Add CORS middleware for frontend integration (future)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Change to specific domains in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    """Simple health check endpoint"""
+    return {
+        "status": "healthy",
+        "message": "Supplier Order System API is running"
+    }
+
+
+@app.on_event("startup")
+def initialize_database():
+    # Creates only mapped tables that do not exist (supplier_orders).
+    Base.metadata.create_all(bind=engine)
+    ensure_supplier_orders_columns()
+
+
+def ensure_supplier_orders_columns():
+    """Ensure supplier_orders contains all dashboard fields on existing databases."""
+    ddl_statements = [
+        "IF COL_LENGTH('supplier_orders', 'vendor_order_date') IS NULL ALTER TABLE supplier_orders ADD vendor_order_date DATE NULL",
+        "IF COL_LENGTH('supplier_orders', 'our_order_number') IS NULL ALTER TABLE supplier_orders ADD our_order_number NVARCHAR(100) NULL",
+        "IF COL_LENGTH('supplier_orders', 'vendor_order_number') IS NULL ALTER TABLE supplier_orders ADD vendor_order_number NVARCHAR(100) NULL",
+        "IF COL_LENGTH('supplier_orders', 'vendor_name') IS NULL ALTER TABLE supplier_orders ADD vendor_name NVARCHAR(255) NULL",
+        "IF COL_LENGTH('supplier_orders', 'unit_price') IS NULL ALTER TABLE supplier_orders ADD unit_price FLOAT NULL",
+        "IF COL_LENGTH('supplier_orders', 'subtotal') IS NULL ALTER TABLE supplier_orders ADD subtotal FLOAT NULL",
+        "IF COL_LENGTH('supplier_orders', 'tax') IS NULL ALTER TABLE supplier_orders ADD tax FLOAT NULL",
+        "IF COL_LENGTH('supplier_orders', 'shipping') IS NULL ALTER TABLE supplier_orders ADD shipping FLOAT NULL",
+        "IF COL_LENGTH('supplier_orders', 'discount') IS NULL ALTER TABLE supplier_orders ADD discount FLOAT NULL",
+        "IF COL_LENGTH('supplier_orders', 'grand_total') IS NULL ALTER TABLE supplier_orders ADD grand_total FLOAT NULL",
+        "IF COL_LENGTH('supplier_orders', 'refund') IS NULL ALTER TABLE supplier_orders ADD refund FLOAT NULL",
+        "IF COL_LENGTH('supplier_orders', 'components') IS NULL ALTER TABLE supplier_orders ADD components NVARCHAR(MAX) NULL",
+        "IF COL_LENGTH('supplier_orders', 'website') IS NULL ALTER TABLE supplier_orders ADD website NVARCHAR(100) NULL",
+    ]
+
+    with engine.begin() as connection:
+        for ddl in ddl_statements:
+            connection.execute(text(ddl))
+
+# Route imports
+from app.routes.compat_routes import router as compat_router
+
+# Include routers
+app.include_router(compat_router)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        app,
+        host="127.0.0.1",
+        port=8000,
+        reload=True
+    )

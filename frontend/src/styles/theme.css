@@ -1,0 +1,23 @@
+:root {
+  --bg: #f3efe6;
+  --bg-accent: #efe6d3;
+  --panel: #fffdf7;
+  --text: #1a1611;
+  --muted: #5e574a;
+  --line: #e2d7bf;
+  --brand: #8f3b20;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 10% 10%, #f7e9cc 0, transparent 42%),
+    radial-gradient(circle at 85% 20%, #ffe5d5 0, transparent 35%),
+    linear-gradient(135deg, var(--bg) 0%, var(--bg-accent) 100%);
+  font-family: Georgia, 'Times New Roman', serif;
+}
