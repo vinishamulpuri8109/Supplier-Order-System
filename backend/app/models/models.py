@@ -13,7 +13,7 @@ class SupplierOrder(Base):
     ORM Model for supplier_orders table.
     
     Attributes:
-        our_order_number: Primary key (sequential order number)
+        soid: Primary key (sequential order number)
         csoid: Customer Order ID (from CustomerOrders table)
         sku: Product SKU
         quantity: Order quantity
@@ -27,8 +27,8 @@ class SupplierOrder(Base):
     
     __tablename__ = "supplier_orders"
     
-    # our_order_number is the primary key (soid)
-    soid = Column("our_order_number", String(100), primary_key=True, nullable=False)
+    # soid is the primary key
+    soid = Column("soid", String(100), primary_key=True, nullable=False)
     website = Column(String(100), nullable=True)
     vendor_order_date = Column(Date, nullable=True)
     vendor_order_number = Column(String(100), nullable=True)

@@ -26,9 +26,9 @@ def get_next_order_number(db: Session = Depends(get_db)):
     try:
         query = text(
             """
-            SELECT MAX(TRY_CONVERT(INT, our_order_number))
+            SELECT MAX(TRY_CONVERT(INT, soid))
             FROM supplier_orders
-            WHERE our_order_number IS NOT NULL
+            WHERE soid IS NOT NULL
             """
         )
         result = db.execute(query).scalar()
