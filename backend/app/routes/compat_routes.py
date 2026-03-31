@@ -14,15 +14,45 @@ from app.schemas import SupplierDashboardCreate
 router = APIRouter(tags=["dashboard-compat"])
 
 
+@router.get("/supplier/soid-exists/{soid}")
+def soid_exists(soid: str, db: Session = Depends(get_db)):
+    exists = db.query(SupplierOrder).filter(SupplierOrder.soid == soid).first() is not None
+    return {"exists": exists}
+
+
+@router.get("/supplier/next-order-number")
+def get_next_order_number(db: Session = Depends(get_db)):
+    """Generate the next sequential OurOrderNumber value."""
+    try:
+        query = text(
+            """
+            SELECT MAX(TRY_CONVERT(INT, our_order_number))
+            FROM supplier_orders
+            WHERE our_order_number IS NOT NULL
+            """
+        )
+        result = db.execute(query).scalar()
+        base_number = max(result or 0, 9999)
+        next_number = base_number + 1
+        return {"orderNumber": str(next_number)}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate order number: {str(exc)}",
+        )
+
+
 @router.get("/orders")
 def search_orders(
     search: str = "",
     csoid: str = "",
     filterType: str = "",
     filterDate: str = "",
+    filterStartDate: str = "",
+    filterEndDate: str = "",
     db: Session = Depends(get_db),
 ):
-    """Search orders by text and optional day/week OrderedDate filter."""
+    """Search orders by text and optional day/week/range OrderedDate filter."""
     try:
         where_clauses = []
         query_params = {}
@@ -52,19 +82,48 @@ def search_orders(
         cleaned_filter_type = filterType.strip().lower()
         cleaned_filter_date = filterDate.strip()
 
-        if cleaned_filter_type and cleaned_filter_type not in {"day", "week"}:
+        if cleaned_filter_type and cleaned_filter_type not in {"day", "week", "range"}:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="filterType must be 'day' or 'week'",
+                detail="filterType must be 'day', 'week', or 'range'",
             )
 
-        if cleaned_filter_type and not cleaned_filter_date:
+        if cleaned_filter_type == "range":
+            cleaned_start_date = filterStartDate.strip()
+            cleaned_end_date = filterEndDate.strip()
+            if not cleaned_start_date or not cleaned_end_date:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="filterStartDate and filterEndDate are required when filterType is 'range'",
+                )
+        elif cleaned_filter_type and not cleaned_filter_date:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="filterDate is required when filterType is provided",
             )
 
-        if cleaned_filter_type:
+        if cleaned_filter_type == "range":
+            try:
+                parsed_start = datetime.strptime(filterStartDate.strip(), "%Y-%m-%d").date()
+                parsed_end = datetime.strptime(filterEndDate.strip(), "%Y-%m-%d").date()
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="filterStartDate and filterEndDate must be in YYYY-MM-DD format",
+                ) from exc
+
+            if parsed_end < parsed_start:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="filterEndDate must be on or after filterStartDate",
+                )
+
+            range_end = parsed_end + timedelta(days=1)
+            where_clauses.append("co.OrderedDate >= :range_start")
+            where_clauses.append("co.OrderedDate < :range_end")
+            query_params["range_start"] = parsed_start
+            query_params["range_end"] = range_end
+        elif cleaned_filter_type:
             try:
                 parsed_date = datetime.strptime(cleaned_filter_date, "%Y-%m-%d").date()
             except ValueError as exc:
@@ -190,7 +249,7 @@ def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(
     """Accept frontend supplier payload and persist supplier order."""
     try:
         resolved_csoid = entry.csoid
-        if resolved_csoid is None and entry.ourOrderNumber:
+        if resolved_csoid is None and entry.custOrderNumber:
             lookup = text(
                 """
                 SELECT TOP 1 co.CSOID
@@ -199,7 +258,9 @@ def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(
                 ORDER BY co.CSOID DESC
                 """
             )
-            resolved_row = db.execute(lookup, {"order_number": entry.ourOrderNumber}).fetchone()
+            resolved_row = db.execute(
+                lookup, {"order_number": entry.custOrderNumber.strip()}
+            ).fetchone()
             if resolved_row:
                 resolved_csoid = int(resolved_row[0])
 
@@ -209,7 +270,16 @@ def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(
                 detail="Unable to resolve CSOID from payload",
             )
 
-        product_name = (entry.productName or "").strip() or entry.components.strip() or "UNKNOWN"
+        csoid_exists = db.execute(
+            text("SELECT TOP 1 1 FROM CustomerOrders WHERE CSOID = :csoid"),
+            {"csoid": resolved_csoid},
+        ).fetchone()
+        if not csoid_exists:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="CSOID does not exist in CustomerOrders",
+            )
+
         supplier_name = entry.vendorName.strip()
         normalized_sku = entry.sku.strip().upper()
 
@@ -223,27 +293,96 @@ def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(
                     detail="vendorOrderDate must be in YYYY-MM-DD format",
                 ) from exc
 
-        existing = db.query(SupplierOrder).filter(
-            (SupplierOrder.csoid == resolved_csoid) & (SupplierOrder.sku == normalized_sku)
-        ).first()
-        if existing:
+        if vendor_order_date and vendor_order_date > datetime.utcnow().date():
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Supplier order already exists for CSOID {resolved_csoid} and SKU {normalized_sku}",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="vendorOrderDate cannot be in the future",
             )
+
+        if not entry.website:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Website is required",
+            )
+
+        if not entry.vendorOrderNumber or not entry.vendorOrderNumber.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Vendor order number is required",
+            )
+
+        if entry.unitPrice <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unit price must be greater than 0",
+            )
+
+        if entry.quantity <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Quantity must be greater than 0",
+            )
+
+        expected_subtotal = entry.unitPrice * entry.quantity
+        if entry.subtotal < 0 or abs(entry.subtotal - expected_subtotal) > 0.01:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Subtotal must equal unit price * quantity",
+            )
+
+        if entry.discount < 0 or entry.discount > entry.subtotal:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Discount must be >= 0 and <= subtotal",
+            )
+
+        if entry.taxRate < 0 or entry.tax < 0 or entry.shipping < 0 or entry.refund < 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Tax, tax rate, shipping, and refund must be >= 0",
+            )
+
+        expected_total = entry.subtotal + entry.tax + entry.shipping - entry.discount
+        if entry.grandTotal < 0 or abs(entry.grandTotal - expected_total) > 0.01:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Grand total must equal subtotal + tax + shipping - discount",
+            )
+
+        if entry.soid:
+            existing_order_number = db.query(SupplierOrder).filter(
+                SupplierOrder.soid == entry.soid
+            ).first()
+            if existing_order_number:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"SOID {entry.soid} already exists",
+                )
+        else:
+            next_query = text(
+                """
+                SELECT MAX(TRY_CONVERT(INT, our_order_number))
+                FROM supplier_orders
+                WHERE our_order_number IS NOT NULL
+                """
+            )
+            result = db.execute(next_query).scalar()
+            base_number = max(result or 0, 9999)
+            entry.soid = str(base_number + 1)
 
         new_order = SupplierOrder(
             csoid=resolved_csoid,
             sku=normalized_sku,
-            product_name=product_name,
+            cust_order_number=(entry.custOrderNumber or '').strip() or None,
             quantity=entry.quantity,
             supplier_name=supplier_name,
             vendor_order_date=vendor_order_date,
-            our_order_number=(entry.ourOrderNumber or "").strip() or None,
+            soid=(entry.soid or "").strip() or None,
             vendor_order_number=(entry.vendorOrderNumber or "").strip() or None,
             vendor_name=supplier_name,
             unit_price=entry.unitPrice,
             subtotal=entry.subtotal,
+            tax_rate=entry.taxRate,
             tax=entry.tax,
             shipping=entry.shipping,
             discount=entry.discount,
@@ -258,21 +397,20 @@ def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(
         db.refresh(new_order)
 
         return {
-            "id": new_order.id,
             "message": "Supplier data saved successfully",
             "supplierOrder": {
-                "id": new_order.id,
+                "soid": new_order.soid,
                 "csoid": new_order.csoid,
+                "cust_order_number": new_order.cust_order_number,
                 "sku": new_order.sku,
-                "product_name": new_order.product_name,
                 "quantity": new_order.quantity,
                 "supplier_name": new_order.supplier_name,
                 "vendor_order_date": new_order.vendor_order_date,
-                "our_order_number": new_order.our_order_number,
                 "vendor_order_number": new_order.vendor_order_number,
                 "vendor_name": new_order.vendor_name,
                 "unit_price": new_order.unit_price,
                 "subtotal": new_order.subtotal,
+                "tax_rate": new_order.tax_rate,
                 "tax": new_order.tax,
                 "shipping": new_order.shipping,
                 "discount": new_order.discount,

@@ -50,7 +50,13 @@ function normalizeItems(payload) {
   return [];
 }
 
-export async function searchOrders({ csoid, filterType, filterDate }) {
+export async function searchOrders({
+  csoid,
+  filterType,
+  filterDate,
+  filterStartDate,
+  filterEndDate,
+}) {
   const params = new URLSearchParams();
   const trimmedCsoid = (csoid || '').trim();
 
@@ -58,7 +64,13 @@ export async function searchOrders({ csoid, filterType, filterDate }) {
     params.set('csoid', trimmedCsoid);
   }
 
-  if (filterType && filterDate) {
+  if (filterType === 'range') {
+    if (filterStartDate && filterEndDate) {
+      params.set('filterType', filterType);
+      params.set('filterStartDate', filterStartDate);
+      params.set('filterEndDate', filterEndDate);
+    }
+  } else if (filterType && filterDate) {
     params.set('filterType', filterType);
     params.set('filterDate', filterDate);
   }
@@ -75,16 +87,25 @@ export async function fetchOrderItems(csoid) {
   return normalizeItems(data);
 }
 
+export async function fetchNextOrderNumber() {
+  const data = await fetchWithFallback(['/supplier/next-order-number']);
+  if (!data?.orderNumber) {
+    throw new Error('No order number returned from server');
+  }
+  return String(data.orderNumber);
+}
+
+export async function checkSoidExists(soid) {
+  const data = await fetchWithFallback([`/supplier/soid-exists/${soid}`]);
+  return Boolean(data?.exists);
+}
+
 export async function saveSupplierData(payload, context = {}) {
   const selectedCsoid = Number(context.selectedOrder?.CSOID ?? context.selectedOrder?.csoid ?? 0);
-  const selectedProductName = String(
-    context.selectedItem?.ProductName ?? context.selectedItem?.product_name ?? '',
-  );
 
   const dashboardPayload = {
     ...payload,
     csoid: Number.isFinite(selectedCsoid) && selectedCsoid > 0 ? selectedCsoid : null,
-    productName: selectedProductName,
   };
 
   return fetchWithFallback(['/supplier'], {

@@ -4,19 +4,54 @@ import OrderItemsTable from '../components/orders/OrderItemsTable';
 import SupplierOrderForm from '../components/supplier/SupplierOrderForm';
 import { useEffect, useMemo, useState } from 'react';
 import { WEBSITE_OPTIONS, WEBSITE_VENDOR_MAP } from '../constants/supplierOptions';
-import { fetchOrderItems, saveSupplierData, searchOrders } from '../services/api';
+import {
+  checkSoidExists,
+  fetchNextOrderNumber,
+  fetchOrderItems,
+  saveSupplierData,
+  searchOrders,
+} from '../services/api';
 
 const todayAsInputDate = () => new Date().toISOString().slice(0, 10);
 
+const toIsoWeekString = (date) => {
+  const utcDate = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = utcDate.getUTCDay() || 7;
+  utcDate.setUTCDate(utcDate.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(utcDate.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil(((utcDate - yearStart) / 86400000 + 1) / 7);
+  const weekStr = String(weekNo).padStart(2, '0');
+  return `${utcDate.getUTCFullYear()}-W${weekStr}`;
+};
+
+const weekInputToDate = (weekInput) => {
+  const match = /^([0-9]{4})-W([0-9]{2})$/.exec(weekInput);
+  if (!match) {
+    return '';
+  }
+  const year = Number(match[1]);
+  const week = Number(match[2]);
+  const firstThursday = new Date(Date.UTC(year, 0, 4));
+  const weekStart = new Date(firstThursday);
+  weekStart.setUTCDate(firstThursday.getUTCDate() - ((firstThursday.getUTCDay() || 7) - 1));
+  weekStart.setUTCDate(weekStart.getUTCDate() + (week - 1) * 7);
+  return weekStart.toISOString().slice(0, 10);
+};
+
+const isValidSoid = (value) => {
+  return /^\d{5,}$/.test(value);
+};
+
 const INITIAL_FORM_DATA = {
   vendorOrderDate: '',
-  ourOrderNumber: '',
+  soid: '',
   vendorOrderNumber: '',
   vendorName: '',
   sku: '',
   unitPrice: '',
   quantity: '',
   subtotal: '',
+  taxRate: '',
   tax: '',
   shipping: '',
   discount: '',
@@ -29,12 +64,15 @@ export default function DashboardPage() {
   const [csoidSearchValue, setCsoidSearchValue] = useState('');
   const [orderFilterType, setOrderFilterType] = useState('');
   const [orderFilterDate, setOrderFilterDate] = useState(todayAsInputDate());
+  const [orderFilterStartDate, setOrderFilterStartDate] = useState(todayAsInputDate());
+  const [orderFilterEndDate, setOrderFilterEndDate] = useState(todayAsInputDate());
   const [orders, setOrders] = useState([]);
   const [items, setItems] = useState([]);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [selectedItem, setSelectedItem] = useState(null);
   const [selectedWebsite, setSelectedWebsite] = useState('');
   const [selectedVendor, setSelectedVendor] = useState('');
+  const [customVendorName, setCustomVendorName] = useState('');
   const [formData, setFormData] = useState(INITIAL_FORM_DATA);
   const [fieldErrors, setFieldErrors] = useState({});
   const [ordersLoading, setOrdersLoading] = useState(false);
@@ -44,20 +82,85 @@ export default function DashboardPage() {
   const [itemsError, setItemsError] = useState('');
   const [formError, setFormError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const [lastChangedField, setLastChangedField] = useState('');
 
   const vendorOptions = useMemo(() => {
-    return WEBSITE_VENDOR_MAP[selectedWebsite] || [];
+    const baseOptions = WEBSITE_VENDOR_MAP[selectedWebsite] || [];
+    if (baseOptions.includes('Other')) {
+      return baseOptions;
+    }
+    return [...baseOptions, 'Other'];
   }, [selectedWebsite]);
 
   useEffect(() => {
     setSelectedVendor('');
+    setCustomVendorName('');
   }, [selectedWebsite]);
 
   useEffect(() => {
+    if (!orderFilterType) {
+      return;
+    }
+    if (orderFilterType === 'week') {
+      if (!orderFilterDate || !orderFilterDate.includes('W')) {
+        const anchorDate = orderFilterDate ? new Date(orderFilterDate) : new Date();
+        setOrderFilterDate(toIsoWeekString(anchorDate));
+      }
+      return;
+    }
+    if (orderFilterType === 'range') {
+      if (!orderFilterStartDate) {
+        setOrderFilterStartDate(todayAsInputDate());
+      }
+      if (!orderFilterEndDate) {
+        setOrderFilterEndDate(todayAsInputDate());
+      }
+      return;
+    }
+    if (orderFilterDate.includes('W')) {
+      setOrderFilterDate(todayAsInputDate());
+    }
+  }, [orderFilterType, orderFilterDate, orderFilterStartDate, orderFilterEndDate]);
+
+  useEffect(() => {
+    let isActive = true;
+    const orderId = selectedOrder?.CSOID ?? selectedOrder?.csoid ?? null;
+
+    if (!orderId) {
+      setFormData((prev) => ({
+        ...prev,
+        soid: '',
+      }));
+      return () => {
+        isActive = false;
+      };
+    }
+
     setFormData((prev) => ({
       ...prev,
-      ourOrderNumber: String(selectedOrder?.CustOrderNumber ?? selectedOrder?.order_number ?? ''),
+      soid: '',
     }));
+
+    fetchNextOrderNumber()
+      .then((orderNumber) => {
+        if (!isActive) {
+          return;
+        }
+        setFormData((prev) => ({
+          ...prev,
+          soid: orderNumber,
+        }));
+      })
+      .catch(() => {
+        if (!isActive) {
+          return;
+        }
+        setFormError('Unable to generate order number');
+      });
+
+    return () => {
+      isActive = false;
+    };
   }, [selectedOrder]);
 
   useEffect(() => {
@@ -69,13 +172,17 @@ export default function DashboardPage() {
   }, [selectedItem]);
 
   useEffect(() => {
+    const resolvedVendor = selectedVendor === 'Other' ? customVendorName : selectedVendor;
     setFormData((prev) => ({
       ...prev,
-      vendorName: selectedVendor,
+      vendorName: resolvedVendor,
     }));
-  }, [selectedVendor]);
+  }, [selectedVendor, customVendorName]);
 
   useEffect(() => {
+    if (lastChangedField === 'grandTotal') {
+      return;
+    }
     const subtotal = Number(formData.subtotal || 0);
     const tax = Number(formData.tax || 0);
     const shipping = Number(formData.shipping || 0);
@@ -86,7 +193,13 @@ export default function DashboardPage() {
       ...prev,
       grandTotal: Number.isFinite(total) ? String(total) : '',
     }));
-  }, [formData.subtotal, formData.tax, formData.shipping, formData.discount]);
+  }, [
+    formData.subtotal,
+    formData.tax,
+    formData.shipping,
+    formData.discount,
+    lastChangedField,
+  ]);
 
   const loadOrderItems = async (order) => {
     const csoid = order?.CSOID ?? order?.csoid;
@@ -118,10 +231,16 @@ export default function DashboardPage() {
     setSuccessMessage('');
 
     try {
+      const resolvedFilterDate =
+        orderFilterType === 'week'
+          ? weekInputToDate(orderFilterDate) || todayAsInputDate()
+          : orderFilterDate;
       const results = await searchOrders({
         csoid: csoidSearchValue,
         filterType: orderFilterType,
-        filterDate: orderFilterDate,
+        filterDate: resolvedFilterDate,
+        filterStartDate: orderFilterStartDate,
+        filterEndDate: orderFilterEndDate,
       });
       setOrders(results);
       setSelectedItem(null);
@@ -157,6 +276,15 @@ export default function DashboardPage() {
   };
 
   const handleFormChange = (field, value) => {
+    setLastChangedField(field);
+    if (field === 'quantity') {
+      const cleaned = value.replace(/[^0-9]/g, '');
+      setFormData((prev) => ({
+        ...prev,
+        [field]: cleaned,
+      }));
+      return;
+    }
     setFormData((prev) => ({
       ...prev,
       [field]: value,
@@ -174,17 +302,94 @@ export default function DashboardPage() {
 
   const validateForm = () => {
     const errors = {};
-    if (!formData.vendorOrderDate) {
-      errors.vendorOrderDate = 'Vendor order date is required';
+    const today = todayAsInputDate();
+
+    if (!formData.soid) {
+      errors.soid = 'SOID is required';
+    } else if (!isValidSoid(formData.soid)) {
+      errors.soid = 'SOID must be a positive integer';
     }
-    if (!formData.vendorName) {
-      errors.vendorName = 'Vendor is required';
+
+    const csoidValue = Number(selectedOrder?.CSOID ?? selectedOrder?.csoid ?? 0);
+    if (!Number.isInteger(csoidValue) || csoidValue <= 0) {
+      errors.csoid = 'CSOID is required';
     }
+
+    const custOrderNumber = String(
+      selectedOrder?.CustOrderNumber ?? selectedOrder?.order_number ?? '',
+    ).trim();
+    if (!custOrderNumber) {
+      errors.custOrderNumber = 'CustOrderNumber is required';
+    }
+
     if (!formData.sku) {
       errors.sku = 'SKU is required';
     }
-    if (!formData.quantity) {
-      errors.quantity = 'Quantity is required';
+
+    if (!selectedWebsite) {
+      errors.website = 'Website is required';
+    }
+
+    if (!formData.vendorName) {
+      errors.vendorName = 'Vendor is required';
+    }
+
+    if (!formData.vendorOrderDate) {
+      errors.vendorOrderDate = 'Vendor order date is required';
+    } else if (formData.vendorOrderDate > today) {
+      errors.vendorOrderDate = 'Vendor order date cannot be in the future';
+    }
+
+    if (!formData.vendorOrderNumber) {
+      errors.vendorOrderNumber = 'Vendor order number is required';
+    }
+
+    const unitPrice = Number(formData.unitPrice || 0);
+    const quantity = Number(formData.quantity || 0);
+    const subtotal = Number(formData.subtotal || 0);
+    const taxRate = Number(formData.taxRate || 0);
+    const tax = Number(formData.tax || 0);
+    const shipping = Number(formData.shipping || 0);
+    const discount = Number(formData.discount || 0);
+    const grandTotal = Number(formData.grandTotal || 0);
+    const refund = Number(formData.refund || 0);
+
+    if (unitPrice <= 0) {
+      errors.unitPrice = 'Unit price must be greater than 0';
+    }
+
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      errors.quantity = 'Quantity must be an integer greater than 0';
+    }
+
+    const expectedSubtotal = unitPrice * quantity;
+    if (subtotal < 0 || Math.abs(subtotal - expectedSubtotal) > 0.01) {
+      errors.subtotal = 'Subtotal must equal unit price * quantity';
+    }
+
+    if (taxRate < 0) {
+      errors.taxRate = 'Tax% must be >= 0';
+    }
+
+    if (tax < 0) {
+      errors.tax = 'Tax must be >= 0';
+    }
+
+    if (shipping < 0) {
+      errors.shipping = 'Shipping must be >= 0';
+    }
+
+    if (discount < 0 || discount > subtotal) {
+      errors.discount = 'Discount must be >= 0 and <= subtotal';
+    }
+
+    const expectedGrandTotal = subtotal + tax + shipping - discount;
+    if (grandTotal < 0 || Math.abs(grandTotal - expectedGrandTotal) > 0.01) {
+      errors.grandTotal = 'Grand total must equal subtotal + tax + shipping - discount';
+    }
+
+    if (refund < 0) {
+      errors.refund = 'Refund must be >= 0';
     }
 
     setFieldErrors(errors);
@@ -202,25 +407,40 @@ export default function DashboardPage() {
       return;
     }
 
+    if (formData.soid) {
+      try {
+        const exists = await checkSoidExists(formData.soid);
+        if (exists) {
+          setFormError('SOID already exists. Generate a new one.');
+          return;
+        }
+      } catch (error) {
+        setFormError(error.message || 'Unable to validate SOID');
+        return;
+      }
+    }
+
     setSaving(true);
     setFormError('');
     setSuccessMessage('');
 
     const payload = {
+      custOrderNumber: String(selectedOrder?.CustOrderNumber ?? selectedOrder?.order_number ?? '').trim(),
       vendorOrderDate: formData.vendorOrderDate,
-      ourOrderNumber: formData.ourOrderNumber,
-      vendorOrderNumber: formData.vendorOrderNumber,
+      soid: formData.soid,
+      vendorOrderNumber: formData.vendorOrderNumber.trim(),
       vendorName: formData.vendorName,
       sku: formData.sku,
       unitPrice: Number(formData.unitPrice || 0),
       quantity: Number(formData.quantity || 0),
       subtotal: Number(formData.subtotal || 0),
+      taxRate: Number(formData.taxRate || 0),
       tax: Number(formData.tax || 0),
       shipping: Number(formData.shipping || 0),
       discount: Number(formData.discount || 0),
       grandTotal: Number(formData.grandTotal || 0),
       refund: Number(formData.refund || 0),
-      components: formData.components,
+      components: formData.components.trim(),
       website: selectedWebsite,
     };
 
@@ -237,9 +457,10 @@ export default function DashboardPage() {
   const handleClearForm = () => {
     setSelectedWebsite('');
     setSelectedVendor('');
+    setCustomVendorName('');
     setFormData((prev) => ({
       ...INITIAL_FORM_DATA,
-      ourOrderNumber: prev.ourOrderNumber,
+      soid: prev.soid,
       sku: prev.sku,
       quantity: prev.quantity,
     }));
@@ -260,6 +481,10 @@ export default function DashboardPage() {
             onFilterTypeChange={setOrderFilterType}
             filterDate={orderFilterDate}
             onFilterDateChange={setOrderFilterDate}
+            filterStartDate={orderFilterStartDate}
+            filterEndDate={orderFilterEndDate}
+            onFilterStartDateChange={setOrderFilterStartDate}
+            onFilterEndDateChange={setOrderFilterEndDate}
             onSearch={handleSearch}
             orders={orders}
             loading={ordersLoading}
@@ -282,10 +507,12 @@ export default function DashboardPage() {
             selectedOrder={selectedOrder}
             selectedWebsite={selectedWebsite}
             selectedVendor={selectedVendor}
+            customVendorName={customVendorName}
             websiteOptions={WEBSITE_OPTIONS}
             vendorOptions={vendorOptions}
             onWebsiteChange={setSelectedWebsite}
             onVendorChange={setSelectedVendor}
+            onCustomVendorNameChange={setCustomVendorName}
             formData={formData}
             fieldErrors={fieldErrors}
             formError={formError}

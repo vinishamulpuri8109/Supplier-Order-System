@@ -21,8 +21,13 @@ const ITEM_FIELD_MAP = {
 function getItemFieldValue(item, column) {
   const candidates = ITEM_FIELD_MAP[column] || [column];
   for (const key of candidates) {
-    if (key in item && item[key] !== null && item[key] !== undefined) {
-      return String(item[key]);
+    if (key in item) {
+      if (item[key] === null) {
+        return 'null';
+      }
+      if (item[key] !== undefined) {
+        return String(item[key]);
+      }
     }
   }
   return '';

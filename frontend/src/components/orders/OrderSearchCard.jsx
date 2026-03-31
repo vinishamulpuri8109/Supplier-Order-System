@@ -41,8 +41,13 @@ const ORDER_FIELD_MAP = {
 function getOrderFieldValue(order, column) {
   const candidates = ORDER_FIELD_MAP[column] || [column];
   for (const key of candidates) {
-    if (key in order && order[key] !== null && order[key] !== undefined) {
-      return String(order[key]);
+    if (key in order) {
+      if (order[key] === null) {
+        return 'null';
+      }
+      if (order[key] !== undefined) {
+        return String(order[key]);
+      }
     }
   }
   return '';
@@ -59,6 +64,10 @@ export default function OrderSearchCard({
   onFilterTypeChange,
   filterDate,
   onFilterDateChange,
+  filterStartDate,
+  filterEndDate,
+  onFilterStartDateChange,
+  onFilterEndDateChange,
   onSearch,
   orders,
   loading,
@@ -88,19 +97,39 @@ export default function OrderSearchCard({
           <select
             value={filterType}
             onChange={(event) => onFilterTypeChange(event.target.value)}
-            aria-label="Filter orders by day or week"
+            aria-label="Filter orders by day, week, or range"
           >
             <option value="">No date filter</option>
             <option value="day">Day</option>
             <option value="week">Week</option>
+            <option value="range">Range</option>
           </select>
-          <input
-            type="date"
-            value={filterDate}
-            onChange={(event) => onFilterDateChange(event.target.value)}
-            disabled={!filterType}
-            aria-label="Order filter date"
-          />
+          {filterType === 'range' ? (
+            <>
+              <input
+                type="date"
+                value={filterStartDate}
+                onChange={(event) => onFilterStartDateChange(event.target.value)}
+                disabled={!filterType}
+                aria-label="Order filter start date"
+              />
+              <input
+                type="date"
+                value={filterEndDate}
+                onChange={(event) => onFilterEndDateChange(event.target.value)}
+                disabled={!filterType}
+                aria-label="Order filter end date"
+              />
+            </>
+          ) : (
+            <input
+              type={filterType === 'week' ? 'week' : 'date'}
+              value={filterDate}
+              onChange={(event) => onFilterDateChange(event.target.value)}
+              disabled={!filterType}
+              aria-label="Order filter date"
+            />
+          )}
           <button type="submit" disabled={loading}>
             {loading ? 'Searching...' : 'Search'}
           </button>
@@ -123,7 +152,7 @@ export default function OrderSearchCard({
             {!loading && orders.length === 0 ? (
               <tr>
                 <td colSpan={ORDER_COLUMNS.length} className="empty-cell">
-                  Search by CSOID, filter by day/week, or use both together.
+                  Search by CSOID, filter by day/week/range, or use both together.
                 </td>
               </tr>
             ) : null}

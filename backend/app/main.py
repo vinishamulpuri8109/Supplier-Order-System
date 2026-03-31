@@ -51,6 +51,7 @@ def ensure_supplier_orders_columns():
         "IF COL_LENGTH('supplier_orders', 'vendor_name') IS NULL ALTER TABLE supplier_orders ADD vendor_name NVARCHAR(255) NULL",
         "IF COL_LENGTH('supplier_orders', 'unit_price') IS NULL ALTER TABLE supplier_orders ADD unit_price FLOAT NULL",
         "IF COL_LENGTH('supplier_orders', 'subtotal') IS NULL ALTER TABLE supplier_orders ADD subtotal FLOAT NULL",
+        "IF COL_LENGTH('supplier_orders', 'tax_rate') IS NULL ALTER TABLE supplier_orders ADD tax_rate FLOAT NULL",
         "IF COL_LENGTH('supplier_orders', 'tax') IS NULL ALTER TABLE supplier_orders ADD tax FLOAT NULL",
         "IF COL_LENGTH('supplier_orders', 'shipping') IS NULL ALTER TABLE supplier_orders ADD shipping FLOAT NULL",
         "IF COL_LENGTH('supplier_orders', 'discount') IS NULL ALTER TABLE supplier_orders ADD discount FLOAT NULL",
@@ -58,6 +59,67 @@ def ensure_supplier_orders_columns():
         "IF COL_LENGTH('supplier_orders', 'refund') IS NULL ALTER TABLE supplier_orders ADD refund FLOAT NULL",
         "IF COL_LENGTH('supplier_orders', 'components') IS NULL ALTER TABLE supplier_orders ADD components NVARCHAR(MAX) NULL",
         "IF COL_LENGTH('supplier_orders', 'website') IS NULL ALTER TABLE supplier_orders ADD website NVARCHAR(100) NULL",
+        "IF COL_LENGTH('supplier_orders', 'cust_order_number') IS NULL ALTER TABLE supplier_orders ADD cust_order_number NVARCHAR(100) NULL",
+        "IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ux_supplier_orders_our_order_number' AND object_id = OBJECT_ID('supplier_orders')) DROP INDEX ux_supplier_orders_our_order_number ON supplier_orders",
+        """
+        DECLARE @uq NVARCHAR(200);
+        SELECT @uq = kc.name
+        FROM sys.key_constraints kc
+        JOIN sys.tables t ON kc.parent_object_id = t.object_id
+        WHERE t.name = 'supplier_orders' AND kc.type = 'UQ';
+
+        IF @uq IS NOT NULL
+        BEGIN
+            EXEC('ALTER TABLE supplier_orders DROP CONSTRAINT ' + @uq);
+        END
+        """,
+        """
+        DECLARE @base INT;
+        SELECT @base = CASE
+            WHEN MAX(TRY_CONVERT(INT, our_order_number)) IS NULL THEN 9999
+            WHEN MAX(TRY_CONVERT(INT, our_order_number)) < 10000 THEN 9999
+            ELSE MAX(TRY_CONVERT(INT, our_order_number))
+        END
+        FROM supplier_orders;
+
+        ;WITH numbered AS (
+            SELECT csoid, sku, ROW_NUMBER() OVER (ORDER BY csoid, sku, created_at) AS rn
+            FROM supplier_orders
+            WHERE our_order_number IS NULL OR LTRIM(RTRIM(our_order_number)) = ''
+        )
+        UPDATE so
+        SET our_order_number = CAST(@base + n.rn AS NVARCHAR(100))
+        FROM supplier_orders so
+        JOIN numbered n ON so.csoid = n.csoid AND so.sku = n.sku;
+        """,
+        """
+        DECLARE @pk NVARCHAR(200);
+        SELECT @pk = kc.name
+        FROM sys.key_constraints kc
+        JOIN sys.tables t ON kc.parent_object_id = t.object_id
+        WHERE t.name = 'supplier_orders' AND kc.type = 'PK';
+
+        IF @pk IS NOT NULL
+        BEGIN
+            EXEC('ALTER TABLE supplier_orders DROP CONSTRAINT ' + @pk);
+        END
+        """,
+        "IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('supplier_orders') AND name = 'our_order_number') ALTER TABLE supplier_orders ALTER COLUMN our_order_number NVARCHAR(100) NOT NULL",
+        """
+        IF NOT EXISTS (
+            SELECT 1
+            FROM sys.key_constraints kc
+            JOIN sys.tables t ON kc.parent_object_id = t.object_id
+            WHERE t.name = 'supplier_orders' AND kc.type = 'PK'
+        )
+        BEGIN
+            ALTER TABLE supplier_orders ADD CONSTRAINT pk_supplier_orders_our_order_number PRIMARY KEY (our_order_number);
+        END
+        """,
+        "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ux_supplier_orders_our_order_number' AND object_id = OBJECT_ID('supplier_orders')) CREATE UNIQUE INDEX ux_supplier_orders_our_order_number ON supplier_orders(our_order_number)",
+        "IF COL_LENGTH('supplier_orders', 'product_name') IS NOT NULL ALTER TABLE supplier_orders DROP COLUMN product_name",
+        "IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ix_supplier_orders_id' AND object_id = OBJECT_ID('supplier_orders')) DROP INDEX ix_supplier_orders_id ON supplier_orders",
+        "IF COL_LENGTH('supplier_orders', 'id') IS NOT NULL ALTER TABLE supplier_orders DROP COLUMN id",
     ]
 
     with engine.begin() as connection:

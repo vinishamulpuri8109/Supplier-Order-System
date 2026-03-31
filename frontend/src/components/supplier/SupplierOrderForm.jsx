@@ -1,15 +1,14 @@
 const INPUT_FIELDS = [
   { key: 'vendorOrderDate', label: 'VendorOrderDate', type: 'date', required: true },
-  { key: 'ourOrderNumber', label: 'OurOrderNumber', readOnly: true },
   { key: 'vendorOrderNumber', label: 'VendorOrderNumber' },
-  { key: 'sku', label: 'SKU', required: true, readOnly: true },
   { key: 'unitPrice', label: 'UnitPrice', type: 'number' },
   { key: 'quantity', label: 'Quantity', type: 'number', required: true },
   { key: 'subtotal', label: 'Subtotal', type: 'number' },
+  { key: 'taxRate', label: 'Tax%', type: 'number' },
   { key: 'tax', label: 'Tax', type: 'number' },
   { key: 'shipping', label: 'Shipping', type: 'number' },
   { key: 'discount', label: 'Discount', type: 'number' },
-  { key: 'grandTotal', label: 'GrandTotal', type: 'number', readOnly: true },
+  { key: 'grandTotal', label: 'GrandTotal', type: 'number' },
   { key: 'refund', label: 'Refund', type: 'number' },
   { key: 'components', label: 'Components' },
 ];
@@ -18,10 +17,12 @@ export default function SupplierOrderForm({
   selectedOrder,
   selectedWebsite,
   selectedVendor,
+  customVendorName,
   websiteOptions,
   vendorOptions,
   onWebsiteChange,
   onVendorChange,
+  onCustomVendorNameChange,
   formData,
   fieldErrors,
   formError,
@@ -32,6 +33,17 @@ export default function SupplierOrderForm({
   onClear,
 }) {
   const formDisabled = !selectedOrder || saving;
+  const requiredMissing =
+    !formData.soid ||
+    !formData.vendorOrderDate ||
+    !formData.vendorOrderNumber ||
+    !formData.vendorName ||
+    !formData.sku ||
+    !formData.quantity ||
+    !formData.unitPrice ||
+    !formData.subtotal ||
+    !formData.grandTotal ||
+    !selectedWebsite;
 
   return (
     <section className="panel">
@@ -46,6 +58,45 @@ export default function SupplierOrderForm({
 
       <div className="form-grid">
         <label className="field-block">
+          <span>
+            SOID <strong className="req">*</strong>
+          </span>
+          <input
+            type="text"
+            value={formData.soid}
+            readOnly
+            disabled={formDisabled}
+          />
+          {fieldErrors.soid ? <small className="error-text">{fieldErrors.soid}</small> : null}
+        </label>
+
+        <label className="field-block">
+          <span>CSOID</span>
+          <input type="text" value={selectedOrder?.CSOID ?? selectedOrder?.csoid ?? ''} readOnly />
+          {fieldErrors.csoid ? <small className="error-text">{fieldErrors.csoid}</small> : null}
+        </label>
+
+        <label className="field-block">
+          <span>CustOrderNumber</span>
+          <input
+            type="text"
+            value={selectedOrder?.CustOrderNumber ?? selectedOrder?.order_number ?? ''}
+            readOnly
+          />
+          {fieldErrors.custOrderNumber ? (
+            <small className="error-text">{fieldErrors.custOrderNumber}</small>
+          ) : null}
+        </label>
+
+        <label className="field-block">
+          <span>
+            SKU <strong className="req">*</strong>
+          </span>
+          <input type="text" value={formData.sku} readOnly disabled={formDisabled} />
+          {fieldErrors.sku ? <small className="error-text">{fieldErrors.sku}</small> : null}
+        </label>
+
+        <label className="field-block">
           <span>Website</span>
           <select
             value={selectedWebsite}
@@ -59,6 +110,7 @@ export default function SupplierOrderForm({
               </option>
             ))}
           </select>
+          {fieldErrors.website ? <small className="error-text">{fieldErrors.website}</small> : null}
         </label>
 
         <label className="field-block">
@@ -77,6 +129,15 @@ export default function SupplierOrderForm({
               </option>
             ))}
           </select>
+          {selectedVendor === 'Other' ? (
+            <input
+              type="text"
+              value={customVendorName}
+              disabled={formDisabled}
+              onChange={(event) => onCustomVendorNameChange(event.target.value)}
+              placeholder="Type vendor name"
+            />
+          ) : null}
           {fieldErrors.vendorName ? <small className="error-text">{fieldErrors.vendorName}</small> : null}
         </label>
 
@@ -90,6 +151,9 @@ export default function SupplierOrderForm({
               value={formData[field.key]}
               readOnly={Boolean(field.readOnly)}
               disabled={formDisabled}
+              step={field.key === 'quantity' ? 1 : undefined}
+              inputMode={field.key === 'quantity' ? 'numeric' : undefined}
+              pattern={field.key === 'quantity' ? '\\d*' : undefined}
               onChange={(event) => onFormChange(field.key, event.target.value)}
             />
             {fieldErrors[field.key] ? <small className="error-text">{fieldErrors[field.key]}</small> : null}
@@ -98,7 +162,7 @@ export default function SupplierOrderForm({
       </div>
 
       <div className="button-row">
-        <button type="button" onClick={onSave} disabled={formDisabled}>
+        <button type="button" onClick={onSave} disabled={formDisabled || requiredMissing}>
           {saving ? 'Saving...' : 'Save Supplier Data'}
         </button>
         <button type="button" className="ghost" onClick={onClear} disabled={saving}>
