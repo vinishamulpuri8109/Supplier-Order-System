@@ -184,3 +184,47 @@ class OrderWithItems(BaseModel):
     
     class Config:
         from_attributes = True
+
+
+class UserCreate(BaseModel):
+    email: str = Field(..., min_length=3)
+    password: str = Field(..., min_length=6)
+    role: str | None = None
+
+    @field_validator("email")
+    def email_valid(cls, v):
+        cleaned = v.strip().lower()
+        if "@" not in cleaned or "." not in cleaned:
+            raise ValueError("Email is invalid")
+        return cleaned
+
+    @field_validator("password")
+    def password_valid(cls, v):
+        if len(v.strip()) < 6:
+            raise ValueError("Password must be at least 6 characters")
+        return v
+
+
+class UserLogin(BaseModel):
+    email: str = Field(..., min_length=3)
+    password: str = Field(..., min_length=1)
+
+    @field_validator("email")
+    def login_email_valid(cls, v):
+        cleaned = v.strip().lower()
+        if "@" not in cleaned or "." not in cleaned:
+            raise ValueError("Email is invalid")
+        return cleaned
+
+
+class UserOut(BaseModel):
+    id: int
+    email: str
+    role: str | None = None
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str
+    email: str
+    role: str | None = None

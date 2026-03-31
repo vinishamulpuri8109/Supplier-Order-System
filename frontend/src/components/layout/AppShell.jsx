@@ -1,4 +1,4 @@
-export default function AppShell({ children }) {
+export default function AppShell({ children, userEmail, onLogout }) {
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -7,6 +7,14 @@ export default function AppShell({ children }) {
         <p className="subtext">
           Search customer orders, inspect order items, and submit supplier data from one screen.
         </p>
+        {userEmail ? (
+          <div className="user-bar">
+            <span>{userEmail}</span>
+            <button type="button" className="ghost" onClick={onLogout}>
+              Logout
+            </button>
+          </div>
+        ) : null}
       </header>
       <main>{children}</main>
     </div>

@@ -60,7 +60,7 @@ const INITIAL_FORM_DATA = {
   components: '',
 };
 
-export default function DashboardPage() {
+export default function DashboardPage({ userEmail, onLogout }) {
   const [csoidSearchValue, setCsoidSearchValue] = useState('');
   const [orderFilterType, setOrderFilterType] = useState('');
   const [orderFilterDate, setOrderFilterDate] = useState(todayAsInputDate());
@@ -470,7 +470,7 @@ export default function DashboardPage() {
   };
 
   return (
-    <AppShell>
+    <AppShell userEmail={userEmail} onLogout={onLogout}>
       <div className="dashboard-layout">
         <section className="dashboard-half order-data-half">
           <h2 className="section-heading">Order Data</h2>

@@ -58,3 +58,18 @@ class SupplierOrder(Base):
             f"<SupplierOrder(soid={self.soid}, csoid={self.csoid}, "
             f"sku={self.sku}, supplier={self.supplier_name})>"
         )
+
+
+class User(Base):
+    """User account for authentication."""
+
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), unique=True, nullable=False)
+    hashed_password = Column(String(255), nullable=False)
+    role = Column(String(50), nullable=False, default="user")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<User(id={self.id}, email={self.email}, role={self.role})>"

@@ -3,8 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 import os
 from dotenv import load_dotenv
-from app.db.database import Base, engine
-from app.models.models import SupplierOrder
+from app.db.database import Base, SessionLocal, engine
+from app.models.models import SupplierOrder, User
+from app.auth import hash_password
 
 # Load environment variables
 load_dotenv()
@@ -40,6 +41,25 @@ def initialize_database():
     # Creates only mapped tables that do not exist (supplier_orders).
     Base.metadata.create_all(bind=engine)
     ensure_supplier_orders_columns()
+    seed_admin_user()
+
+
+def seed_admin_user():
+    """Create a default admin user if one does not exist."""
+    db = SessionLocal()
+    try:
+        existing = db.query(User).filter(User.email == "admin@local.com").first()
+        if existing:
+            return
+        user = User(
+            email="admin@local.com",
+            hashed_password=hash_password("ordertarcker@123"),
+            role="admin",
+        )
+        db.add(user)
+        db.commit()
+    finally:
+        db.close()
 
 
 def ensure_supplier_orders_columns():
@@ -135,10 +155,12 @@ def ensure_supplier_orders_columns():
             connection.execute(text(ddl))
 
 # Route imports
+from app.routes.auth_routes import router as auth_router
 from app.routes.compat_routes import router as compat_router
 
 # Include routers
 app.include_router(compat_router)
+app.include_router(auth_router)
 
 if __name__ == "__main__":
     import uvicorn

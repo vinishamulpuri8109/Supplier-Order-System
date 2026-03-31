@@ -6,12 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user
 from app.db.database import get_db
 from app.models.models import SupplierOrder
 from app.schemas import SupplierDashboardCreate
 
 
-router = APIRouter(tags=["dashboard-compat"])
+router = APIRouter(tags=["dashboard-compat"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("/supplier/soid-exists/{soid}")
@@ -361,9 +362,9 @@ def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(
         else:
             next_query = text(
                 """
-                SELECT MAX(TRY_CONVERT(INT, our_order_number))
+                SELECT MAX(TRY_CONVERT(INT, soid))
                 FROM supplier_orders
-                WHERE our_order_number IS NOT NULL
+                WHERE soid IS NOT NULL
                 """
             )
             result = db.execute(next_query).scalar()
