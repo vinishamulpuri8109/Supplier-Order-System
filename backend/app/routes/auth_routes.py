@@ -1,35 +1,15 @@
-"""Authentication routes for signup and login."""
+"""Authentication routes for login."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.auth import create_access_token, hash_password, verify_password
+from app.auth import create_access_token, verify_password
 from app.db.database import get_db
 from app.models.models import User
-from app.schemas import TokenResponse, UserCreate, UserLogin, UserOut
+from app.schemas import TokenResponse, UserLogin
 
 
 router = APIRouter(tags=["auth"])
-
-
-@router.post("/signup", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-def signup(payload: UserCreate, db: Session = Depends(get_db)):
-    existing = db.query(User).filter(User.email == payload.email).first()
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="User with this email already exists",
-        )
-
-    user = User(
-        email=payload.email,
-        hashed_password=hash_password(payload.password),
-        role=payload.role or "user",
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    return UserOut(id=user.id, email=user.email, role=user.role)
 
 
 @router.post("/login", response_model=TokenResponse)

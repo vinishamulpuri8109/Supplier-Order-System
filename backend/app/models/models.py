@@ -46,7 +46,7 @@ class SupplierOrder(Base):
     discount = Column(Float, nullable=True)
     grand_total = Column(Float, nullable=True)
     refund = Column(Float, nullable=True)
-    components = Column(Text, nullable=True)
+    comments = Column(Text, nullable=True)
     
     status = Column(String(50), default="pending", nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

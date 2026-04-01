@@ -84,7 +84,14 @@ def ensure_supplier_orders_columns():
         "IF COL_LENGTH('supplier_orders', 'discount') IS NULL ALTER TABLE supplier_orders ADD discount FLOAT NULL",
         "IF COL_LENGTH('supplier_orders', 'grand_total') IS NULL ALTER TABLE supplier_orders ADD grand_total FLOAT NULL",
         "IF COL_LENGTH('supplier_orders', 'refund') IS NULL ALTER TABLE supplier_orders ADD refund FLOAT NULL",
-        "IF COL_LENGTH('supplier_orders', 'components') IS NULL ALTER TABLE supplier_orders ADD components NVARCHAR(MAX) NULL",
+        """
+        IF COL_LENGTH('supplier_orders', 'comments') IS NULL
+           AND COL_LENGTH('supplier_orders', 'components') IS NOT NULL
+        BEGIN
+            EXEC sp_rename 'supplier_orders.components', 'comments', 'COLUMN';
+        END
+        """,
+        "IF COL_LENGTH('supplier_orders', 'comments') IS NULL ALTER TABLE supplier_orders ADD comments NVARCHAR(MAX) NULL",
         "IF COL_LENGTH('supplier_orders', 'website') IS NULL ALTER TABLE supplier_orders ADD website NVARCHAR(100) NULL",
         "IF COL_LENGTH('supplier_orders', 'cust_order_number') IS NULL ALTER TABLE supplier_orders ADD cust_order_number NVARCHAR(100) NULL",
         "IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ux_supplier_orders_our_order_number' AND object_id = OBJECT_ID('supplier_orders')) DROP INDEX ux_supplier_orders_our_order_number ON supplier_orders",

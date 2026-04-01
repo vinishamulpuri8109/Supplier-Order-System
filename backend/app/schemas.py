@@ -46,7 +46,7 @@ class SupplierDashboardCreate(BaseModel):
     discount: float = 0
     grandTotal: float = 0
     refund: float = 0
-    components: str = ""
+    comments: str = ""
     website: str = Field(..., min_length=1)
     csoid: int | None = None
     custOrderNumber: str = Field(..., min_length=1)
@@ -150,7 +150,7 @@ class SupplierOrderResponse(BaseModel):
     discount: float | None = None
     grand_total: float | None = None
     refund: float | None = None
-    components: str | None = None
+    comments: str | None = None
     website: str | None = None
     status: str
     created_at: datetime
@@ -186,25 +186,6 @@ class OrderWithItems(BaseModel):
         from_attributes = True
 
 
-class UserCreate(BaseModel):
-    email: str = Field(..., min_length=3)
-    password: str = Field(..., min_length=6)
-    role: str | None = None
-
-    @field_validator("email")
-    def email_valid(cls, v):
-        cleaned = v.strip().lower()
-        if "@" not in cleaned or "." not in cleaned:
-            raise ValueError("Email is invalid")
-        return cleaned
-
-    @field_validator("password")
-    def password_valid(cls, v):
-        if len(v.strip()) < 6:
-            raise ValueError("Password must be at least 6 characters")
-        return v
-
-
 class UserLogin(BaseModel):
     email: str = Field(..., min_length=3)
     password: str = Field(..., min_length=1)
@@ -215,12 +196,6 @@ class UserLogin(BaseModel):
         if "@" not in cleaned or "." not in cleaned:
             raise ValueError("Email is invalid")
         return cleaned
-
-
-class UserOut(BaseModel):
-    id: int
-    email: str
-    role: str | None = None
 
 
 class TokenResponse(BaseModel):

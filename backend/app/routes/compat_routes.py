@@ -176,6 +176,12 @@ def search_orders(
 
         rows = db.execute(query, query_params).fetchall()
 
+        if cleaned_csoid and not rows:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="The searched CSOID does not exist",
+            )
+
         return [
             {
                 "CSOID": row[0],
@@ -198,6 +204,8 @@ def search_orders(
             }
             for row in rows
         ]
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -389,7 +397,7 @@ def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(
             discount=entry.discount,
             grand_total=entry.grandTotal,
             refund=entry.refund,
-            components=(entry.components or "").strip() or None,
+            comments=(entry.comments or "").strip() or None,
             website=(entry.website or "").strip() or None,
             status="pending",
         )
@@ -417,7 +425,7 @@ def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(
                 "discount": new_order.discount,
                 "grand_total": new_order.grand_total,
                 "refund": new_order.refund,
-                "components": new_order.components,
+                "comments": new_order.comments,
                 "website": new_order.website,
                 "status": new_order.status,
                 "created_at": new_order.created_at,
