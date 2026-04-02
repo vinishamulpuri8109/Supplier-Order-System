@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
+import logging
 import os
 from dotenv import load_dotenv
 from app.db.database import Base, SessionLocal, engine
@@ -9,6 +10,22 @@ from app.auth import hash_password
 
 # Load environment variables
 load_dotenv()
+
+logger = logging.getLogger("uvicorn.error")
+
+
+def _get_allowed_origins() -> list[str]:
+    raw = os.getenv("ALLOWED_ORIGINS", "")
+    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    if not origins:
+        raise RuntimeError(
+            "Invalid ALLOWED_ORIGINS. Set ALLOWED_ORIGINS as a comma-separated list of allowed origins."
+        )
+    return origins
+
+
+def _is_admin_seed_enabled() -> bool:
+    return (os.getenv("ENABLE_ADMIN_SEED", "false").strip().lower() == "true")
 
 # Create FastAPI app
 app = FastAPI(
@@ -20,7 +37,7 @@ app = FastAPI(
 # Add CORS middleware for frontend integration (future)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Change to specific domains in production
+    allow_origins=_get_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -41,7 +58,11 @@ def initialize_database():
     # Creates only mapped tables that do not exist (supplier_orders).
     Base.metadata.create_all(bind=engine)
     ensure_supplier_orders_columns()
-    seed_admin_user()
+    if _is_admin_seed_enabled():
+        logger.info("Admin seeding enabled; running seed_admin_user().")
+        seed_admin_user()
+    else:
+        logger.info("Admin seeding disabled; skipping seed_admin_user().")
 
 
 def seed_admin_user():
@@ -76,14 +97,21 @@ def ensure_supplier_orders_columns():
         "IF COL_LENGTH('supplier_orders', 'soid') IS NULL ALTER TABLE supplier_orders ADD soid NVARCHAR(100) NULL",
         "IF COL_LENGTH('supplier_orders', 'vendor_order_number') IS NULL ALTER TABLE supplier_orders ADD vendor_order_number NVARCHAR(100) NULL",
         "IF COL_LENGTH('supplier_orders', 'vendor_name') IS NULL ALTER TABLE supplier_orders ADD vendor_name NVARCHAR(255) NULL",
-        "IF COL_LENGTH('supplier_orders', 'unit_price') IS NULL ALTER TABLE supplier_orders ADD unit_price FLOAT NULL",
-        "IF COL_LENGTH('supplier_orders', 'subtotal') IS NULL ALTER TABLE supplier_orders ADD subtotal FLOAT NULL",
-        "IF COL_LENGTH('supplier_orders', 'tax_rate') IS NULL ALTER TABLE supplier_orders ADD tax_rate FLOAT NULL",
-        "IF COL_LENGTH('supplier_orders', 'tax') IS NULL ALTER TABLE supplier_orders ADD tax FLOAT NULL",
-        "IF COL_LENGTH('supplier_orders', 'shipping') IS NULL ALTER TABLE supplier_orders ADD shipping FLOAT NULL",
-        "IF COL_LENGTH('supplier_orders', 'discount') IS NULL ALTER TABLE supplier_orders ADD discount FLOAT NULL",
-        "IF COL_LENGTH('supplier_orders', 'grand_total') IS NULL ALTER TABLE supplier_orders ADD grand_total FLOAT NULL",
-        "IF COL_LENGTH('supplier_orders', 'refund') IS NULL ALTER TABLE supplier_orders ADD refund FLOAT NULL",
+        "IF COL_LENGTH('supplier_orders', 'unit_price') IS NULL ALTER TABLE supplier_orders ADD unit_price DECIMAL(18,2) NULL",
+        "IF COL_LENGTH('supplier_orders', 'subtotal') IS NULL ALTER TABLE supplier_orders ADD subtotal DECIMAL(18,2) NULL",
+        "IF COL_LENGTH('supplier_orders', 'tax') IS NULL ALTER TABLE supplier_orders ADD tax DECIMAL(18,2) NULL",
+        "IF COL_LENGTH('supplier_orders', 'shipping') IS NULL ALTER TABLE supplier_orders ADD shipping DECIMAL(18,2) NULL",
+        "IF COL_LENGTH('supplier_orders', 'discount') IS NULL ALTER TABLE supplier_orders ADD discount DECIMAL(18,2) NULL",
+        "IF COL_LENGTH('supplier_orders', 'grand_total') IS NULL ALTER TABLE supplier_orders ADD grand_total DECIMAL(18,2) NULL",
+        "IF COL_LENGTH('supplier_orders', 'refund') IS NULL ALTER TABLE supplier_orders ADD refund DECIMAL(18,2) NULL",
+        "IF COL_LENGTH('supplier_orders', 'unit_price') IS NOT NULL ALTER TABLE supplier_orders ALTER COLUMN unit_price DECIMAL(18,2) NULL",
+        "IF COL_LENGTH('supplier_orders', 'subtotal') IS NOT NULL ALTER TABLE supplier_orders ALTER COLUMN subtotal DECIMAL(18,2) NULL",
+        "IF COL_LENGTH('supplier_orders', 'tax') IS NOT NULL ALTER TABLE supplier_orders ALTER COLUMN tax DECIMAL(18,2) NULL",
+        "IF COL_LENGTH('supplier_orders', 'shipping') IS NOT NULL ALTER TABLE supplier_orders ALTER COLUMN shipping DECIMAL(18,2) NULL",
+        "IF COL_LENGTH('supplier_orders', 'discount') IS NOT NULL ALTER TABLE supplier_orders ALTER COLUMN discount DECIMAL(18,2) NULL",
+        "IF COL_LENGTH('supplier_orders', 'grand_total') IS NOT NULL ALTER TABLE supplier_orders ALTER COLUMN grand_total DECIMAL(18,2) NULL",
+        "IF COL_LENGTH('supplier_orders', 'refund') IS NOT NULL ALTER TABLE supplier_orders ALTER COLUMN refund DECIMAL(18,2) NULL",
+        "IF COL_LENGTH('supplier_orders', 'tax_rate') IS NOT NULL ALTER TABLE supplier_orders DROP COLUMN tax_rate",
         """
         IF COL_LENGTH('supplier_orders', 'comments') IS NULL
            AND COL_LENGTH('supplier_orders', 'components') IS NOT NULL
@@ -93,7 +121,14 @@ def ensure_supplier_orders_columns():
         """,
         "IF COL_LENGTH('supplier_orders', 'comments') IS NULL ALTER TABLE supplier_orders ADD comments NVARCHAR(MAX) NULL",
         "IF COL_LENGTH('supplier_orders', 'website') IS NULL ALTER TABLE supplier_orders ADD website NVARCHAR(100) NULL",
-        "IF COL_LENGTH('supplier_orders', 'cust_order_number') IS NULL ALTER TABLE supplier_orders ADD cust_order_number NVARCHAR(100) NULL",
+        """
+        IF COL_LENGTH('supplier_orders', 'cust_order_number') IS NOT NULL
+           AND COL_LENGTH('supplier_orders', 'po') IS NULL
+        BEGIN
+            EXEC sp_rename 'supplier_orders.cust_order_number', 'po', 'COLUMN';
+        END
+        """,
+        "IF COL_LENGTH('supplier_orders', 'po') IS NULL ALTER TABLE supplier_orders ADD po NVARCHAR(100) NULL",
         "IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ux_supplier_orders_our_order_number' AND object_id = OBJECT_ID('supplier_orders')) DROP INDEX ux_supplier_orders_our_order_number ON supplier_orders",
         "IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ux_supplier_orders_soid' AND object_id = OBJECT_ID('supplier_orders')) DROP INDEX ux_supplier_orders_soid ON supplier_orders",
         """

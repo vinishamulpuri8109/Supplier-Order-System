@@ -13,7 +13,16 @@ from app.db.database import get_db
 from app.models.models import User
 
 
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change-me")
+def _get_jwt_secret_key() -> str:
+    value = (os.getenv("JWT_SECRET_KEY") or "").strip()
+    if not value or value == "change-me":
+        raise RuntimeError(
+            "Invalid JWT_SECRET_KEY. Set a non-empty, non-default JWT_SECRET_KEY in environment variables."
+        )
+    return value
+
+
+SECRET_KEY = _get_jwt_secret_key()
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "60"))
 

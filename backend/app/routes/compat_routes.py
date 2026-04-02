@@ -1,6 +1,7 @@
 """Compatibility routes for frontend dashboard integration."""
 
 from datetime import datetime, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import text
@@ -13,6 +14,10 @@ from app.schemas import SupplierDashboardCreate
 
 
 router = APIRouter(tags=["dashboard-compat"], dependencies=[Depends(get_current_user)])
+
+
+def _as_decimal(value: float) -> Decimal:
+    return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 @router.get("/supplier/soid-exists/{soid}")
@@ -153,7 +158,6 @@ def search_orders(
             SELECT TOP 100
                 co.CSOID,
                 co.CustOrderNumber,
-                co.TaxRate,
                 co.TaxAmount,
                 co.ShippingCharge,
                 co.Coupon,
@@ -186,21 +190,20 @@ def search_orders(
             {
                 "CSOID": row[0],
                 "CustOrderNumber": row[1],
-                "TaxRate": row[2],
-                "TaxAmount": row[3],
-                "ShippingCharge": row[4],
-                "Coupon": row[5],
-                "CouponValue": row[6],
-                "Subtotal": row[7],
-                "TotalAmount": row[8],
-                "ShippingMethod": row[9],
-                "OrderedDate": row[10],
-                "OrderStatusName": row[11],
-                "OrderClosingDate": row[12],
-                "cid": row[13],
-                "ReturnAmount": row[14],
-                "PaymentMethod": row[15],
-                "PaymentTransId": row[16],
+                "TaxAmount": row[2],
+                "ShippingCharge": row[3],
+                "Coupon": row[4],
+                "CouponValue": row[5],
+                "Subtotal": row[6],
+                "TotalAmount": row[7],
+                "ShippingMethod": row[8],
+                "OrderedDate": row[9],
+                "OrderStatusName": row[10],
+                "OrderClosingDate": row[11],
+                "cid": row[12],
+                "ReturnAmount": row[13],
+                "PaymentMethod": row[14],
+                "PaymentTransId": row[15],
             }
             for row in rows
         ]
@@ -258,7 +261,7 @@ def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(
     """Accept frontend supplier payload and persist supplier order."""
     try:
         resolved_csoid = entry.csoid
-        if resolved_csoid is None and entry.custOrderNumber:
+        if resolved_csoid is None and entry.po:
             lookup = text(
                 """
                 SELECT TOP 1 co.CSOID
@@ -268,7 +271,7 @@ def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(
                 """
             )
             resolved_row = db.execute(
-                lookup, {"order_number": entry.custOrderNumber.strip()}
+                lookup, {"order_number": entry.po.strip()}
             ).fetchone()
             if resolved_row:
                 resolved_csoid = int(resolved_row[0])
@@ -332,8 +335,10 @@ def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(
                 detail="Quantity must be greater than 0",
             )
 
-        expected_subtotal = entry.unitPrice * entry.quantity
-        if entry.subtotal < 0 or abs(entry.subtotal - expected_subtotal) > 0.01:
+        expected_subtotal = (_as_decimal(entry.unitPrice) * Decimal(entry.quantity)).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        if _as_decimal(entry.subtotal) != expected_subtotal:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Subtotal must equal unit price * quantity",
@@ -345,14 +350,19 @@ def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(
                 detail="Discount must be >= 0 and <= subtotal",
             )
 
-        if entry.taxRate < 0 or entry.tax < 0 or entry.shipping < 0 or entry.refund < 0:
+        if entry.tax < 0 or entry.shipping < 0 or entry.refund < 0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Tax, tax rate, shipping, and refund must be >= 0",
+                detail="Tax, shipping, and refund must be >= 0",
             )
 
-        expected_total = entry.subtotal + entry.tax + entry.shipping - entry.discount
-        if entry.grandTotal < 0 or abs(entry.grandTotal - expected_total) > 0.01:
+        expected_total = (
+            _as_decimal(entry.subtotal)
+            + _as_decimal(entry.tax)
+            + _as_decimal(entry.shipping)
+            - _as_decimal(entry.discount)
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if _as_decimal(entry.grandTotal) != expected_total:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Grand total must equal subtotal + tax + shipping - discount",
@@ -382,7 +392,7 @@ def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(
         new_order = SupplierOrder(
             csoid=resolved_csoid,
             sku=normalized_sku,
-            cust_order_number=(entry.custOrderNumber or '').strip() or None,
+            po=(entry.po or '').strip() or None,
             quantity=entry.quantity,
             supplier_name=supplier_name,
             vendor_order_date=vendor_order_date,
@@ -391,7 +401,6 @@ def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(
             vendor_name=supplier_name,
             unit_price=entry.unitPrice,
             subtotal=entry.subtotal,
-            tax_rate=entry.taxRate,
             tax=entry.tax,
             shipping=entry.shipping,
             discount=entry.discount,
@@ -410,7 +419,7 @@ def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(
             "supplierOrder": {
                 "soid": new_order.soid,
                 "csoid": new_order.csoid,
-                "cust_order_number": new_order.cust_order_number,
+                "po": new_order.po,
                 "sku": new_order.sku,
                 "quantity": new_order.quantity,
                 "supplier_name": new_order.supplier_name,
@@ -419,7 +428,6 @@ def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(
                 "vendor_name": new_order.vendor_name,
                 "unit_price": new_order.unit_price,
                 "subtotal": new_order.subtotal,
-                "tax_rate": new_order.tax_rate,
                 "tax": new_order.tax,
                 "shipping": new_order.shipping,
                 "discount": new_order.discount,

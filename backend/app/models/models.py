@@ -4,7 +4,7 @@ Defines database table structures and relationships.
 """
 
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Date, Float, Text
+from sqlalchemy import Column, Integer, String, DateTime, Date, Numeric, Text
 from app.db.database import Base
 
 
@@ -35,17 +35,16 @@ class SupplierOrder(Base):
     vendor_name = Column(String(255), nullable=True)
     sku = Column(String(50), nullable=False)
     csoid = Column(Integer, nullable=False)
-    cust_order_number = Column(String(100), nullable=True)
+    po = Column(String(100), nullable=True)
     quantity = Column(Integer, nullable=False)
     supplier_name = Column(String(255), nullable=False)
-    unit_price = Column(Float, nullable=True)
-    subtotal = Column(Float, nullable=True)
-    tax_rate = Column(Float, nullable=True)
-    tax = Column(Float, nullable=True)
-    shipping = Column(Float, nullable=True)
-    discount = Column(Float, nullable=True)
-    grand_total = Column(Float, nullable=True)
-    refund = Column(Float, nullable=True)
+    unit_price = Column(Numeric(18, 2), nullable=True)
+    subtotal = Column(Numeric(18, 2), nullable=True)
+    tax = Column(Numeric(18, 2), nullable=True)
+    shipping = Column(Numeric(18, 2), nullable=True)
+    discount = Column(Numeric(18, 2), nullable=True)
+    grand_total = Column(Numeric(18, 2), nullable=True)
+    refund = Column(Numeric(18, 2), nullable=True)
     comments = Column(Text, nullable=True)
     
     status = Column(String(50), default="pending", nullable=False)

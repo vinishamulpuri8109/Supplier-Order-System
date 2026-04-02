@@ -19,6 +19,11 @@ DB_USER = os.getenv("DB_USER", "sa")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 DB_DRIVER = os.getenv("DB_DRIVER", "ODBC Driver 17 for SQL Server")
 
+if not (DB_PASSWORD or "").strip():
+    raise RuntimeError(
+        "Invalid DB_PASSWORD. Set a non-empty DB_PASSWORD in environment variables before starting the backend."
+    )
+
 # SQL Server Connection String using pyodbc
 # URL-encode special characters in credentials (especially @ in password)
 # Format: mssql+pyodbc://username:password@server/database?driver=DRIVER_NAME&param=value

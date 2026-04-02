@@ -4,6 +4,7 @@ Used for API data serialization, deserialization, and validation.
 """
 
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -40,7 +41,6 @@ class SupplierDashboardCreate(BaseModel):
     quantity: int = Field(..., gt=0)
     unitPrice: float = 0
     subtotal: float = 0
-    taxRate: float = 0
     tax: float = 0
     shipping: float = 0
     discount: float = 0
@@ -49,8 +49,26 @@ class SupplierDashboardCreate(BaseModel):
     comments: str = ""
     website: str = Field(..., min_length=1)
     csoid: int | None = None
-    custOrderNumber: str = Field(..., min_length=1)
+    po: str = Field(..., min_length=1)
     productName: str | None = None
+
+    @staticmethod
+    def _normalize_currency_value(value, field_label: str) -> float:
+        if value is None:
+            return 0.0
+        try:
+            decimal_value = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ValueError(f"{field_label} must be a valid number") from exc
+
+        if decimal_value < 0:
+            raise ValueError(f"{field_label} must be >= 0")
+
+        rounded = decimal_value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if decimal_value != rounded:
+            raise ValueError(f"{field_label} can have at most 2 decimal places")
+
+        return float(rounded)
 
     @field_validator("vendorName")
     def vendor_name_not_empty(cls, v):
@@ -75,11 +93,11 @@ class SupplierDashboardCreate(BaseModel):
             raise ValueError("SOID must be numeric")
         return cleaned
 
-    @field_validator("custOrderNumber")
-    def cust_order_number_valid(cls, v):
+    @field_validator("po")
+    def po_valid(cls, v):
         cleaned = v.strip()
         if not cleaned:
-            raise ValueError("CustOrderNumber cannot be empty")
+            raise ValueError("PO cannot be empty")
         return cleaned
 
     @field_validator("vendorOrderDate")
@@ -103,13 +121,9 @@ class SupplierDashboardCreate(BaseModel):
             raise ValueError("Website must be selected")
         return cleaned
 
-    @field_validator("unitPrice", "subtotal", "taxRate", "tax", "shipping", "discount", "grandTotal", "refund")
-    def non_negative_numbers(cls, v):
-        if v is None:
-            return 0
-        if v < 0:
-            raise ValueError("Values must be >= 0")
-        return v
+    @field_validator("unitPrice", "subtotal", "tax", "shipping", "discount", "grandTotal", "refund")
+    def non_negative_numbers(cls, v, info):
+        return cls._normalize_currency_value(v, info.field_name)
 
     @field_validator("quantity")
     def quantity_valid(cls, v):
@@ -135,7 +149,7 @@ class SupplierOrderResponse(BaseModel):
     """Schema for API response when returning a supplier order."""
     soid: str
     csoid: int
-    cust_order_number: str | None = None
+    po: str | None = None
     sku: str
     quantity: int
     supplier_name: str
@@ -144,7 +158,6 @@ class SupplierOrderResponse(BaseModel):
     vendor_name: str | None = None
     unit_price: float | None = None
     subtotal: float | None = None
-    tax_rate: float | None = None
     tax: float | None = None
     shipping: float | None = None
     discount: float | None = None

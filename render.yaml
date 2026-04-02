@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: supplier-order-backend
+    env: docker
+    rootDir: backend
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: DB_SERVER
+        sync: false
+      - key: DB_DATABASE
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_DRIVER
+        value: ODBC Driver 18 for SQL Server
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: JWT_EXPIRE_MINUTES
+        value: "60"
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: ENABLE_ADMIN_SEED
+        value: "false"
