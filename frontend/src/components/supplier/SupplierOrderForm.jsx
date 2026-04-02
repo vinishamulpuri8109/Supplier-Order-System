@@ -79,7 +79,7 @@ export default function SupplierOrderForm({
           <span>PO</span>
           <input
             type="text"
-            value={selectedOrder?.po ?? selectedOrder?.order_number ?? ''}
+            value={selectedOrder?.CustOrderNumber ?? selectedOrder?.po ?? selectedOrder?.order_number ?? ''}
             readOnly
           />
           {fieldErrors.po ? (

@@ -1,6 +1,6 @@
 const ORDER_COLUMNS = [
   'CSOID',
-  'po',
+  'CustOrderNumber',
   'TaxAmount',
   'ShippingCharge',
   'Coupon',
@@ -19,7 +19,7 @@ const ORDER_COLUMNS = [
 
 const ORDER_FIELD_MAP = {
   CSOID: ['CSOID', 'csoid'],
-  po: ['po', 'order_number'],
+  CustOrderNumber: ['CustOrderNumber', 'po', 'order_number'],
   TaxAmount: ['TaxAmount', 'tax_amount'],
   ShippingCharge: ['ShippingCharge', 'shipping_charge'],
   Coupon: ['Coupon', 'coupon'],
@@ -52,7 +52,7 @@ function getOrderFieldValue(order, column) {
 }
 
 function getOrderRowId(order) {
-  return String(order.CSOID ?? order.csoid ?? order.po ?? order.order_number ?? '');
+  return String(order.CSOID ?? order.csoid ?? order.CustOrderNumber ?? order.po ?? order.order_number ?? '');
 }
 
 export default function OrderSearchCard({

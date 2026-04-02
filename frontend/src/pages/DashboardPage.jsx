@@ -323,7 +323,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
     }
 
     const poValue = String(
-      selectedOrder?.po ?? selectedOrder?.order_number ?? '',
+      selectedOrder?.CustOrderNumber ?? selectedOrder?.po ?? selectedOrder?.order_number ?? '',
     ).trim();
     if (!poValue) {
       errors.po = 'PO is required';
@@ -427,7 +427,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
     setSuccessMessage('');
 
     const payload = {
-      po: String(selectedOrder?.po ?? selectedOrder?.order_number ?? '').trim(),
+      po: String(selectedOrder?.CustOrderNumber ?? selectedOrder?.po ?? selectedOrder?.order_number ?? '').trim(),
       vendorOrderDate: formData.vendorOrderDate,
       soid: formData.soid,
       vendorOrderNumber: formData.vendorOrderNumber.trim(),
