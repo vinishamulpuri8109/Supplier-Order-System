@@ -7,9 +7,9 @@ export default function AppShell({ children, userEmail, onLogout }) {
         <p className="subtext">
           Search customer orders, inspect order items, and submit supplier data from one screen.
         </p>
-        {userEmail ? (
+        {onLogout ? (
           <div className="user-bar">
-            <span>{userEmail}</span>
+            {userEmail ? <span>{userEmail}</span> : null}
             <button type="button" className="ghost" onClick={onLogout}>
               Logout
             </button>

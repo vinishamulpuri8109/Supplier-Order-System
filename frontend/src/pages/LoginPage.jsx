@@ -18,7 +18,7 @@ export default function LoginPage() {
     try {
       const result = await login(email.trim(), password);
       setAuth(result.access_token, result.email, result.role);
-      navigate('/', { replace: true });
+      navigate('/dashboard', { replace: true });
     } catch (err) {
       setError(err.message || 'Unable to login');
     } finally {

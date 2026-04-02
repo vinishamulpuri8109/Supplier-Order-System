@@ -2,7 +2,17 @@ const TOKEN_KEY = 'auth_token';
 const EMAIL_KEY = 'auth_email';
 const ROLE_KEY = 'auth_role';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+function resolveApiBaseUrl() {
+  const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL;
+  if (configuredBaseUrl && configuredBaseUrl.trim()) {
+    return configuredBaseUrl.trim().replace(/\/+$/, '');
+  }
+
+  // In local development, go through Vite proxy to avoid host/CORS issues.
+  return '/api';
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
 
 export function setAuth(token, email, role) {
   localStorage.setItem(TOKEN_KEY, token);
@@ -33,13 +43,18 @@ export function getUserRole() {
 }
 
 export async function login(email, password) {
-  const response = await fetch(`${API_BASE_URL}/login`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ email, password }),
-  });
+  let response;
+  try {
+    response = await fetch(`${API_BASE_URL}/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ email, password }),
+    });
+  } catch (error) {
+    throw new Error(`Unable to reach API at ${API_BASE_URL}. Verify backend is running.`);
+  }
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {

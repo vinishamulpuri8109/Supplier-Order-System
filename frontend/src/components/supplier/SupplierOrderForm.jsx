@@ -4,13 +4,12 @@ const INPUT_FIELDS = [
   { key: 'unitPrice', label: 'UnitPrice', type: 'number' },
   { key: 'quantity', label: 'Quantity', type: 'number', required: true },
   { key: 'subtotal', label: 'Subtotal', type: 'number' },
-  { key: 'taxRate', label: 'Tax%', type: 'number' },
   { key: 'tax', label: 'Tax', type: 'number' },
   { key: 'shipping', label: 'Shipping', type: 'number' },
   { key: 'discount', label: 'Discount', type: 'number' },
   { key: 'grandTotal', label: 'GrandTotal', type: 'number' },
   { key: 'refund', label: 'Refund', type: 'number' },
-  { key: 'components', label: 'Components' },
+  { key: 'comments', label: 'Comments' },
 ];
 
 export default function SupplierOrderForm({
@@ -77,14 +76,14 @@ export default function SupplierOrderForm({
         </label>
 
         <label className="field-block">
-          <span>CustOrderNumber</span>
+          <span>PO</span>
           <input
             type="text"
-            value={selectedOrder?.CustOrderNumber ?? selectedOrder?.order_number ?? ''}
+            value={selectedOrder?.po ?? selectedOrder?.order_number ?? ''}
             readOnly
           />
-          {fieldErrors.custOrderNumber ? (
-            <small className="error-text">{fieldErrors.custOrderNumber}</small>
+          {fieldErrors.po ? (
+            <small className="error-text">{fieldErrors.po}</small>
           ) : null}
         </label>
 

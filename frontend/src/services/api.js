@@ -1,6 +1,16 @@
 import { getToken } from './auth';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+function resolveApiBaseUrl() {
+  const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL;
+  if (configuredBaseUrl && configuredBaseUrl.trim()) {
+    return configuredBaseUrl.trim().replace(/\/+$/, '');
+  }
+
+  // In local development, go through Vite proxy to avoid host/CORS issues.
+  return '/api';
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
 
 async function parseJsonResponse(response) {
   const contentType = response.headers.get('content-type') || '';

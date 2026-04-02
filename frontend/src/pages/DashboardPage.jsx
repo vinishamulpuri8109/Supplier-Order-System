@@ -51,13 +51,12 @@ const INITIAL_FORM_DATA = {
   unitPrice: '',
   quantity: '',
   subtotal: '',
-  taxRate: '',
   tax: '',
   shipping: '',
   discount: '',
   grandTotal: '',
   refund: '',
-  components: '',
+  comments: '',
 };
 
 export default function DashboardPage({ userEmail, onLogout }) {
@@ -253,7 +252,15 @@ export default function DashboardPage({ userEmail, onLogout }) {
         setSelectedOrder(null);
       }
     } catch (error) {
-      setOrdersError(error.message || 'Unable to fetch orders');
+      const rawMessage = error?.message || 'Unable to fetch orders';
+      const searchingByCsoid = Boolean((csoidSearchValue || '').trim());
+      const isAuthTokenError = /invalid authentication token|not authenticated|unauthorized/i.test(rawMessage);
+
+      if (searchingByCsoid && isAuthTokenError) {
+        setOrdersError('CSOID does not exist');
+      } else {
+        setOrdersError(rawMessage);
+      }
       setOrders([]);
       setSelectedOrder(null);
       setSelectedItem(null);
@@ -315,11 +322,11 @@ export default function DashboardPage({ userEmail, onLogout }) {
       errors.csoid = 'CSOID is required';
     }
 
-    const custOrderNumber = String(
-      selectedOrder?.CustOrderNumber ?? selectedOrder?.order_number ?? '',
+    const poValue = String(
+      selectedOrder?.po ?? selectedOrder?.order_number ?? '',
     ).trim();
-    if (!custOrderNumber) {
-      errors.custOrderNumber = 'CustOrderNumber is required';
+    if (!poValue) {
+      errors.po = 'PO is required';
     }
 
     if (!formData.sku) {
@@ -347,7 +354,6 @@ export default function DashboardPage({ userEmail, onLogout }) {
     const unitPrice = Number(formData.unitPrice || 0);
     const quantity = Number(formData.quantity || 0);
     const subtotal = Number(formData.subtotal || 0);
-    const taxRate = Number(formData.taxRate || 0);
     const tax = Number(formData.tax || 0);
     const shipping = Number(formData.shipping || 0);
     const discount = Number(formData.discount || 0);
@@ -365,10 +371,6 @@ export default function DashboardPage({ userEmail, onLogout }) {
     const expectedSubtotal = unitPrice * quantity;
     if (subtotal < 0 || Math.abs(subtotal - expectedSubtotal) > 0.01) {
       errors.subtotal = 'Subtotal must equal unit price * quantity';
-    }
-
-    if (taxRate < 0) {
-      errors.taxRate = 'Tax% must be >= 0';
     }
 
     if (tax < 0) {
@@ -425,7 +427,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
     setSuccessMessage('');
 
     const payload = {
-      custOrderNumber: String(selectedOrder?.CustOrderNumber ?? selectedOrder?.order_number ?? '').trim(),
+      po: String(selectedOrder?.po ?? selectedOrder?.order_number ?? '').trim(),
       vendorOrderDate: formData.vendorOrderDate,
       soid: formData.soid,
       vendorOrderNumber: formData.vendorOrderNumber.trim(),
@@ -434,13 +436,12 @@ export default function DashboardPage({ userEmail, onLogout }) {
       unitPrice: Number(formData.unitPrice || 0),
       quantity: Number(formData.quantity || 0),
       subtotal: Number(formData.subtotal || 0),
-      taxRate: Number(formData.taxRate || 0),
       tax: Number(formData.tax || 0),
       shipping: Number(formData.shipping || 0),
       discount: Number(formData.discount || 0),
       grandTotal: Number(formData.grandTotal || 0),
       refund: Number(formData.refund || 0),
-      components: formData.components.trim(),
+      comments: formData.comments.trim(),
       website: selectedWebsite,
     };
 
