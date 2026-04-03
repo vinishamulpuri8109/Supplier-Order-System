@@ -5,7 +5,6 @@ import SupplierOrderForm from '../components/supplier/SupplierOrderForm';
 import { useEffect, useMemo, useState } from 'react';
 import { WEBSITE_OPTIONS, WEBSITE_VENDOR_MAP } from '../constants/supplierOptions';
 import {
-  checkSoidExists,
   fetchNextOrderNumber,
   fetchOrderItems,
   saveSupplierData,
@@ -41,6 +40,38 @@ const weekInputToDate = (weekInput) => {
 const isValidSoid = (value) => {
   return /^\d{5,}$/.test(value);
 };
+
+const MONEY_INPUT_REGEX = /^\d*(?:\.\d{0,2})?$/;
+const MONEY_FIELDS = new Set(['unitPrice', 'tax', 'shipping', 'discount', 'refund']);
+
+const roundToTwo = (value) => Number(Number(value || 0).toFixed(2));
+
+const formatMoneyValue = (value) => {
+  if (value === '' || value === null || value === undefined) {
+    return '';
+  }
+
+  const parsedValue = Number(value);
+  if (!Number.isFinite(parsedValue)) {
+    return '';
+  }
+
+  return Number(parsedValue.toFixed(2)).toFixed(2);
+};
+
+const sanitizeMoneyInput = (nextValue, previousValue) => {
+  if (nextValue === '') {
+    return '';
+  }
+
+  if (!MONEY_INPUT_REGEX.test(nextValue)) {
+    return previousValue;
+  }
+
+  return nextValue;
+};
+
+const toMoneyNumber = (value) => roundToTwo(value);
 
 const INITIAL_FORM_DATA = {
   vendorOrderDate: '',
@@ -81,7 +112,6 @@ export default function DashboardPage({ userEmail, onLogout }) {
   const [itemsError, setItemsError] = useState('');
   const [formError, setFormError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
-  const [lastChangedField, setLastChangedField] = useState('');
 
   const vendorOptions = useMemo(() => {
     const baseOptions = WEBSITE_VENDOR_MAP[selectedWebsite] || [];
@@ -125,7 +155,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
     let isActive = true;
     const orderId = selectedOrder?.CSOID ?? selectedOrder?.csoid ?? null;
 
-    if (!orderId) {
+    if (!orderId || !selectedItem) {
       setFormData((prev) => ({
         ...prev,
         soid: '',
@@ -160,7 +190,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
     return () => {
       isActive = false;
     };
-  }, [selectedOrder]);
+  }, [selectedOrder, selectedItem]);
 
   useEffect(() => {
     setFormData((prev) => ({
@@ -179,26 +209,45 @@ export default function DashboardPage({ userEmail, onLogout }) {
   }, [selectedVendor, customVendorName]);
 
   useEffect(() => {
-    if (lastChangedField === 'grandTotal') {
+    const quantity = Number(formData.quantity || 0);
+    const unitPrice = Number(formData.unitPrice || 0);
+
+    if (!quantity || !unitPrice) {
+      setFormData((prev) => ({
+        ...prev,
+        subtotal: '',
+      }));
       return;
     }
+
+    const calculatedSubtotal = roundToTwo(quantity * unitPrice);
+
+    setFormData((prev) => ({
+      ...prev,
+      subtotal: calculatedSubtotal.toFixed(2),
+    }));
+  }, [formData.quantity, formData.unitPrice]);
+
+  useEffect(() => {
+    if (!formData.subtotal) {
+      setFormData((prev) => ({
+        ...prev,
+        grandTotal: '',
+      }));
+      return;
+    }
+
     const subtotal = Number(formData.subtotal || 0);
     const tax = Number(formData.tax || 0);
     const shipping = Number(formData.shipping || 0);
     const discount = Number(formData.discount || 0);
-    const total = subtotal + tax + shipping - discount;
+    const total = roundToTwo(subtotal + tax + shipping - discount);
 
     setFormData((prev) => ({
       ...prev,
-      grandTotal: Number.isFinite(total) ? String(total) : '',
+      grandTotal: total.toFixed(2),
     }));
-  }, [
-    formData.subtotal,
-    formData.tax,
-    formData.shipping,
-    formData.discount,
-    lastChangedField,
-  ]);
+  }, [formData.subtotal, formData.tax, formData.shipping, formData.discount]);
 
   const loadOrderItems = async (order) => {
     const csoid = order?.CSOID ?? order?.csoid;
@@ -283,28 +332,41 @@ export default function DashboardPage({ userEmail, onLogout }) {
   };
 
   const handleFormChange = (field, value) => {
-    setLastChangedField(field);
+    const clearFieldError = () => {
+      setFieldErrors((prev) => {
+        if (!prev[field]) {
+          return prev;
+        }
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
+    };
+
     if (field === 'quantity') {
       const cleaned = value.replace(/[^0-9]/g, '');
       setFormData((prev) => ({
         ...prev,
         [field]: cleaned,
       }));
+      clearFieldError();
       return;
     }
+
+    if (MONEY_FIELDS.has(field)) {
+      setFormData((prev) => ({
+        ...prev,
+        [field]: sanitizeMoneyInput(value, prev[field]),
+      }));
+      clearFieldError();
+      return;
+    }
+
     setFormData((prev) => ({
       ...prev,
       [field]: value,
     }));
-
-    setFieldErrors((prev) => {
-      if (!prev[field]) {
-        return prev;
-      }
-      const next = { ...prev };
-      delete next[field];
-      return next;
-    });
+    clearFieldError();
   };
 
   const validateForm = () => {
@@ -351,14 +413,14 @@ export default function DashboardPage({ userEmail, onLogout }) {
       errors.vendorOrderNumber = 'Vendor order number is required';
     }
 
-    const unitPrice = Number(formData.unitPrice || 0);
+    const unitPrice = toMoneyNumber(formData.unitPrice);
     const quantity = Number(formData.quantity || 0);
-    const subtotal = Number(formData.subtotal || 0);
-    const tax = Number(formData.tax || 0);
-    const shipping = Number(formData.shipping || 0);
-    const discount = Number(formData.discount || 0);
-    const grandTotal = Number(formData.grandTotal || 0);
-    const refund = Number(formData.refund || 0);
+    const subtotal = toMoneyNumber(formData.subtotal);
+    const tax = toMoneyNumber(formData.tax);
+    const shipping = toMoneyNumber(formData.shipping);
+    const discount = toMoneyNumber(formData.discount);
+    const grandTotal = toMoneyNumber(formData.grandTotal);
+    const refund = toMoneyNumber(formData.refund);
 
     if (unitPrice <= 0) {
       errors.unitPrice = 'Unit price must be greater than 0';
@@ -368,8 +430,8 @@ export default function DashboardPage({ userEmail, onLogout }) {
       errors.quantity = 'Quantity must be an integer greater than 0';
     }
 
-    const expectedSubtotal = unitPrice * quantity;
-    if (subtotal < 0 || Math.abs(subtotal - expectedSubtotal) > 0.01) {
+    const expectedSubtotal = roundToTwo(unitPrice * quantity);
+    if (subtotal < 0 || subtotal !== expectedSubtotal) {
       errors.subtotal = 'Subtotal must equal unit price * quantity';
     }
 
@@ -385,8 +447,8 @@ export default function DashboardPage({ userEmail, onLogout }) {
       errors.discount = 'Discount must be >= 0 and <= subtotal';
     }
 
-    const expectedGrandTotal = subtotal + tax + shipping - discount;
-    if (grandTotal < 0 || Math.abs(grandTotal - expectedGrandTotal) > 0.01) {
+    const expectedGrandTotal = roundToTwo(subtotal + tax + shipping - discount);
+    if (grandTotal < 0 || grandTotal !== expectedGrandTotal) {
       errors.grandTotal = 'Grand total must equal subtotal + tax + shipping - discount';
     }
 
@@ -409,19 +471,6 @@ export default function DashboardPage({ userEmail, onLogout }) {
       return;
     }
 
-    if (formData.soid) {
-      try {
-        const exists = await checkSoidExists(formData.soid);
-        if (exists) {
-          setFormError('SOID already exists. Generate a new one.');
-          return;
-        }
-      } catch (error) {
-        setFormError(error.message || 'Unable to validate SOID');
-        return;
-      }
-    }
-
     setSaving(true);
     setFormError('');
     setSuccessMessage('');
@@ -433,21 +482,35 @@ export default function DashboardPage({ userEmail, onLogout }) {
       vendorOrderNumber: formData.vendorOrderNumber.trim(),
       vendorName: formData.vendorName,
       sku: formData.sku,
-      unitPrice: Number(formData.unitPrice || 0),
+      unitPrice: toMoneyNumber(formData.unitPrice),
       quantity: Number(formData.quantity || 0),
-      subtotal: Number(formData.subtotal || 0),
-      tax: Number(formData.tax || 0),
-      shipping: Number(formData.shipping || 0),
-      discount: Number(formData.discount || 0),
-      grandTotal: Number(formData.grandTotal || 0),
-      refund: Number(formData.refund || 0),
+      subtotal: toMoneyNumber(formData.subtotal),
+      tax: toMoneyNumber(formData.tax),
+      shipping: toMoneyNumber(formData.shipping),
+      discount: toMoneyNumber(formData.discount),
+      grandTotal: toMoneyNumber(formData.grandTotal),
+      refund: toMoneyNumber(formData.refund),
       comments: formData.comments.trim(),
       website: selectedWebsite,
     };
 
     try {
-      await saveSupplierData(payload, { selectedOrder, selectedItem });
+      const response = await saveSupplierData(payload, { selectedOrder, selectedItem });
+      const savedSoid = response?.supplierOrder?.soid ? String(response.supplierOrder.soid) : formData.soid;
+      setFormData((prev) => ({
+        ...prev,
+        soid: savedSoid,
+      }));
       setSuccessMessage('Supplier data saved successfully');
+
+      fetchNextOrderNumber()
+        .then((nextOrderNumber) => {
+          setFormData((prev) => ({
+            ...prev,
+            soid: nextOrderNumber,
+          }));
+        })
+        .catch(() => {});
     } catch (error) {
       setFormError(error.message || 'Unable to save supplier data');
     } finally {
@@ -520,6 +583,25 @@ export default function DashboardPage({ userEmail, onLogout }) {
             successMessage={successMessage}
             saving={saving}
             onFormChange={handleFormChange}
+            onFormBlur={(field, value) => {
+              if (!MONEY_FIELDS.has(field) && field !== 'quantity') {
+                return;
+              }
+
+              if (field === 'quantity') {
+                const cleaned = value.replace(/[^0-9]/g, '');
+                setFormData((prev) => ({
+                  ...prev,
+                  quantity: cleaned,
+                }));
+                return;
+              }
+
+              setFormData((prev) => ({
+                ...prev,
+                [field]: formatMoneyValue(value),
+              }));
+            }}
             onSave={handleSaveSupplierData}
             onClear={handleClearForm}
           />

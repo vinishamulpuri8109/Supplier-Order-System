@@ -1,8 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from sqlalchemy import text
 import logging
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 from app.db.database import Base, SessionLocal, engine
 from app.models.models import SupplierOrder, User
@@ -203,6 +205,32 @@ from app.routes.compat_routes import router as compat_router
 # Include routers
 app.include_router(compat_router)
 app.include_router(auth_router)
+
+
+FRONTEND_DIST_DIR = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+FRONTEND_INDEX_HTML = FRONTEND_DIST_DIR / "index.html"
+
+
+@app.get("/{full_path:path}")
+async def spa_fallback(full_path: str):
+    """Serve the frontend SPA for non-API routes when a build is available."""
+    first_segment = full_path.split("/", 1)[0]
+    api_routes = {"health", "orders", "order-items", "supplier", "login", "auth"}
+
+    if first_segment in api_routes:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+    requested_path = FRONTEND_DIST_DIR / full_path
+    if requested_path.is_file():
+        return FileResponse(requested_path)
+
+    if requested_path.suffix:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+    if FRONTEND_INDEX_HTML.is_file():
+        return FileResponse(FRONTEND_INDEX_HTML)
+
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Frontend build not found")
 
 if __name__ == "__main__":
     import uvicorn

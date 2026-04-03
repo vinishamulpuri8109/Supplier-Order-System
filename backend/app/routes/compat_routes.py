@@ -20,6 +20,19 @@ def _as_decimal(value: float) -> Decimal:
     return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+def _get_next_soid(db: Session) -> str:
+    query = text(
+        """
+        SELECT MAX(TRY_CONVERT(INT, soid))
+        FROM supplier_orders
+        WHERE soid IS NOT NULL
+        """
+    )
+    result = db.execute(query).scalar()
+    base_number = max(result or 0, 9999)
+    return str(base_number + 1)
+
+
 @router.get("/supplier/soid-exists/{soid}")
 def soid_exists(soid: str, db: Session = Depends(get_db)):
     exists = db.query(SupplierOrder).filter(SupplierOrder.soid == soid).first() is not None
@@ -30,17 +43,7 @@ def soid_exists(soid: str, db: Session = Depends(get_db)):
 def get_next_order_number(db: Session = Depends(get_db)):
     """Generate the next sequential OurOrderNumber value."""
     try:
-        query = text(
-            """
-            SELECT MAX(TRY_CONVERT(INT, soid))
-            FROM supplier_orders
-            WHERE soid IS NOT NULL
-            """
-        )
-        result = db.execute(query).scalar()
-        base_number = max(result or 0, 9999)
-        next_number = base_number + 1
-        return {"orderNumber": str(next_number)}
+        return {"orderNumber": _get_next_soid(db)}
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -335,16 +338,16 @@ def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(
                 detail="Quantity must be greater than 0",
             )
 
-        expected_subtotal = (_as_decimal(entry.unitPrice) * Decimal(entry.quantity)).quantize(
+        calculated_subtotal = (_as_decimal(entry.unitPrice) * Decimal(entry.quantity)).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
-        if _as_decimal(entry.subtotal) != expected_subtotal:
+        if _as_decimal(entry.subtotal) != calculated_subtotal:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Subtotal must equal unit price * quantity",
             )
 
-        if entry.discount < 0 or entry.discount > entry.subtotal:
+        if entry.discount < 0 or entry.discount > calculated_subtotal:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Discount must be >= 0 and <= subtotal",
@@ -356,38 +359,19 @@ def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(
                 detail="Tax, shipping, and refund must be >= 0",
             )
 
-        expected_total = (
-            _as_decimal(entry.subtotal)
+        calculated_grand_total = (
+            calculated_subtotal
             + _as_decimal(entry.tax)
             + _as_decimal(entry.shipping)
             - _as_decimal(entry.discount)
         ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        if _as_decimal(entry.grandTotal) != expected_total:
+        if _as_decimal(entry.grandTotal) != calculated_grand_total:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Grand total must equal subtotal + tax + shipping - discount",
             )
 
-        if entry.soid:
-            existing_order_number = db.query(SupplierOrder).filter(
-                SupplierOrder.soid == entry.soid
-            ).first()
-            if existing_order_number:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"SOID {entry.soid} already exists",
-                )
-        else:
-            next_query = text(
-                """
-                SELECT MAX(TRY_CONVERT(INT, soid))
-                FROM supplier_orders
-                WHERE soid IS NOT NULL
-                """
-            )
-            result = db.execute(next_query).scalar()
-            base_number = max(result or 0, 9999)
-            entry.soid = str(base_number + 1)
+        generated_soid = _get_next_soid(db)
 
         new_order = SupplierOrder(
             csoid=resolved_csoid,
@@ -396,15 +380,15 @@ def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(
             quantity=entry.quantity,
             supplier_name=supplier_name,
             vendor_order_date=vendor_order_date,
-            soid=(entry.soid or "").strip() or None,
+            soid=generated_soid,
             vendor_order_number=(entry.vendorOrderNumber or "").strip() or None,
             vendor_name=supplier_name,
             unit_price=entry.unitPrice,
-            subtotal=entry.subtotal,
+            subtotal=calculated_subtotal,
             tax=entry.tax,
             shipping=entry.shipping,
             discount=entry.discount,
-            grand_total=entry.grandTotal,
+            grand_total=calculated_grand_total,
             refund=entry.refund,
             comments=(entry.comments or "").strip() or None,
             website=(entry.website or "").strip() or None,

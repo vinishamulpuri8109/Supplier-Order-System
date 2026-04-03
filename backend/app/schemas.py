@@ -5,6 +5,7 @@ Used for API data serialization, deserialization, and validation.
 
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -39,13 +40,13 @@ class SupplierDashboardCreate(BaseModel):
     vendorName: str = Field(..., min_length=1)
     sku: str = Field(..., min_length=1)
     quantity: int = Field(..., gt=0)
-    unitPrice: float = 0
-    subtotal: float = 0
-    tax: float = 0
-    shipping: float = 0
-    discount: float = 0
-    grandTotal: float = 0
-    refund: float = 0
+    unitPrice: Decimal = Field(default=Decimal('0.00'), ge=0, max_digits=18, decimal_places=2)
+    subtotal: Decimal = Field(default=Decimal('0.00'), ge=0, max_digits=18, decimal_places=2)
+    tax: Decimal = Field(default=Decimal('0.00'), ge=0, max_digits=18, decimal_places=2)
+    shipping: Decimal = Field(default=Decimal('0.00'), ge=0, max_digits=18, decimal_places=2)
+    discount: Decimal = Field(default=Decimal('0.00'), ge=0, max_digits=18, decimal_places=2)
+    grandTotal: Decimal = Field(default=Decimal('0.00'), ge=0, max_digits=18, decimal_places=2)
+    refund: Decimal = Field(default=Decimal('0.00'), ge=0, max_digits=18, decimal_places=2)
     comments: str = ""
     website: str = Field(..., min_length=1)
     csoid: int | None = None
@@ -53,9 +54,9 @@ class SupplierDashboardCreate(BaseModel):
     productName: str | None = None
 
     @staticmethod
-    def _normalize_currency_value(value, field_label: str) -> float:
+    def _normalize_currency_value(value, field_label: str) -> Decimal:
         if value is None:
-            return 0.0
+            return Decimal("0.00")
         try:
             decimal_value = Decimal(str(value))
         except (InvalidOperation, TypeError, ValueError) as exc:
@@ -68,7 +69,7 @@ class SupplierDashboardCreate(BaseModel):
         if decimal_value != rounded:
             raise ValueError(f"{field_label} can have at most 2 decimal places")
 
-        return float(rounded)
+        return rounded
 
     @field_validator("vendorName")
     def vendor_name_not_empty(cls, v):

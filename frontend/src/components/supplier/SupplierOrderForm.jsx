@@ -1,14 +1,14 @@
 const INPUT_FIELDS = [
   { key: 'vendorOrderDate', label: 'VendorOrderDate', type: 'date', required: true },
   { key: 'vendorOrderNumber', label: 'VendorOrderNumber' },
-  { key: 'unitPrice', label: 'UnitPrice', type: 'number' },
-  { key: 'quantity', label: 'Quantity', type: 'number', required: true },
-  { key: 'subtotal', label: 'Subtotal', type: 'number' },
-  { key: 'tax', label: 'Tax', type: 'number' },
-  { key: 'shipping', label: 'Shipping', type: 'number' },
-  { key: 'discount', label: 'Discount', type: 'number' },
-  { key: 'grandTotal', label: 'GrandTotal', type: 'number' },
-  { key: 'refund', label: 'Refund', type: 'number' },
+  { key: 'unitPrice', label: 'UnitPrice', type: 'text', inputMode: 'decimal', money: true },
+  { key: 'quantity', label: 'Quantity', type: 'text', inputMode: 'numeric', integer: true, required: true },
+  { key: 'subtotal', label: 'Subtotal', type: 'text', money: true, disabled: true },
+  { key: 'tax', label: 'Tax', type: 'text', inputMode: 'decimal', money: true },
+  { key: 'shipping', label: 'Shipping', type: 'text', inputMode: 'decimal', money: true },
+  { key: 'discount', label: 'Discount', type: 'text', inputMode: 'decimal', money: true },
+  { key: 'grandTotal', label: 'GrandTotal', type: 'text', money: true, disabled: true },
+  { key: 'refund', label: 'Refund', type: 'text', inputMode: 'decimal', money: true },
   { key: 'comments', label: 'Comments' },
 ];
 
@@ -28,6 +28,7 @@ export default function SupplierOrderForm({
   successMessage,
   saving,
   onFormChange,
+  onFormBlur,
   onSave,
   onClear,
 }) {
@@ -148,12 +149,13 @@ export default function SupplierOrderForm({
             <input
               type={field.type || 'text'}
               value={formData[field.key]}
-              readOnly={Boolean(field.readOnly)}
-              disabled={formDisabled}
+              readOnly={Boolean(field.readOnly || field.disabled)}
+              disabled={formDisabled || Boolean(field.disabled)}
               step={field.key === 'quantity' ? 1 : undefined}
-              inputMode={field.key === 'quantity' ? 'numeric' : undefined}
-              pattern={field.key === 'quantity' ? '\\d*' : undefined}
+              inputMode={field.inputMode}
+              pattern={field.integer ? '\\d*' : field.money ? '\\d*(?:\\.\\d{0,2})?' : undefined}
               onChange={(event) => onFormChange(field.key, event.target.value)}
+              onBlur={field.money || field.integer ? (event) => onFormBlur(field.key, event.target.value) : undefined}
             />
             {fieldErrors[field.key] ? <small className="error-text">{fieldErrors[field.key]}</small> : null}
           </label>
