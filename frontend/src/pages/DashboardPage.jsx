@@ -151,15 +151,28 @@ export default function DashboardPage({ userEmail, onLogout }) {
   const [assignmentErrors, setAssignmentErrors] = useState({});
   const [supplierOrders, setSupplierOrders] = useState([]);
   const [supplierFinancialDrafts, setSupplierFinancialDrafts] = useState({});
+  const [isAssignmentEditing, setIsAssignmentEditing] = useState(false);
   const [editingOrderKeys, setEditingOrderKeys] = useState({});
   const [savingOrderKeys, setSavingOrderKeys] = useState({});
   const vendorOptions = useMemo(() => {
-    const fromWebsite = WEBSITE_VENDOR_MAP[selectedWebsite] || [];
+    // Get vendors from selected website (primary source)
+    const fromWebsite = selectedWebsite ? (WEBSITE_VENDOR_MAP[selectedWebsite] || []) : [];
+    
+    // Get vendors from current assignments (secondary source - custom vendors)
     const fromAssignments = Object.values(skuAssignments)
       .map((entry) => (entry?.vendor_name || '').trim())
       .filter((value) => Boolean(value) && value !== 'None');
-    const fromOrders = supplierOrders.map((order) => order.vendor_name).filter(Boolean);
-    return ['None', ...new Set([...fromWebsite, ...fromAssignments, ...fromOrders])];
+    
+    // Get vendors from existing orders (tertiary source)
+    const fromOrders = supplierOrders
+      .map((order) => (order.vendor_name || '').trim())
+      .filter((value) => Boolean(value) && value !== 'None');
+    
+    // Combine all sources: website vendors take priority, then custom from assignments, then from orders
+    const combined = [...new Set([...fromWebsite, ...fromAssignments, ...fromOrders])];
+    
+    // Always include 'None' as the first option
+    return ['None', ...combined];
   }, [selectedWebsite, skuAssignments, supplierOrders]);
 
   const initializeAssignments = (fetchedItems) => {
@@ -227,6 +240,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
       setSkuAssignments({});
       setSupplierOrders([]);
       setSupplierFinancialDrafts({});
+      setIsAssignmentEditing(false);
       return;
     }
 
@@ -239,6 +253,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
       const fetchedItems = await fetchOrderItems(csoid);
       setItems(fetchedItems);
       initializeAssignments(fetchedItems);
+      setIsAssignmentEditing(false);
       await loadSupplierOrders(csoid);
     } catch (error) {
       setItems([]);
@@ -246,6 +261,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
       setItemsError(error.message || 'Unable to load order items');
       setSupplierOrders([]);
       setSupplierFinancialDrafts({});
+      setIsAssignmentEditing(false);
     } finally {
       setItemsLoading(false);
     }
@@ -274,6 +290,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
       setItems([]);
       setSupplierOrders([]);
       setSupplierFinancialDrafts({});
+      setIsAssignmentEditing(false);
 
       if (results.length > 0) {
         setSelectedOrder(results[0]);
@@ -290,6 +307,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
       setSkuAssignments({});
       setSupplierOrders([]);
       setSupplierFinancialDrafts({});
+      setIsAssignmentEditing(false);
     } finally {
       setOrdersLoading(false);
     }
@@ -555,6 +573,17 @@ export default function DashboardPage({ userEmail, onLogout }) {
   };
 
   const handleToggleOrderEdit = (orderKey) => {
+    const isCurrentlyEditing = editingOrderKeys[orderKey];
+    
+    // If closing edit mode (clicking Done), discard unsaved changes
+    if (isCurrentlyEditing) {
+      setSupplierFinancialDrafts((prev) => {
+        const updated = { ...prev };
+        delete updated[orderKey];
+        return updated;
+      });
+    }
+    
     setEditingOrderKeys((prev) => ({
       ...prev,
       [orderKey]: !prev[orderKey],
@@ -565,12 +594,32 @@ export default function DashboardPage({ userEmail, onLogout }) {
     const draft = supplierFinancialDrafts[getOrderKey(order)] || {};
     const normalizedVendor = String(draft.vendor_name || order.vendor_name || '').trim() || 'None';
     const normalizedStatus = String(draft.status || order.status || 'confirmed').toLowerCase();
+    const isVendorSelected = normalizedVendor.toLowerCase() !== 'none';
 
-    if (normalizedStatus === 'confirmed' && normalizedVendor.toLowerCase() === 'none') {
+    if (normalizedStatus === 'confirmed' && !isVendorSelected) {
       return `SOID ${order.soid}: vendor is required when status is confirmed`;
     }
-    if (normalizedStatus === 'backordered' && normalizedVendor.toLowerCase() !== 'none') {
+    if (normalizedStatus === 'backordered' && isVendorSelected) {
       return `SOID ${order.soid}: vendor must be None when status is backordered`;
+    }
+
+    // When vendor is selected, require all fields except comments
+    if (isVendorSelected) {
+      // Check vendor_website_order_date
+      if (!draft.vendor_website_order_date || draft.vendor_website_order_date.trim() === '') {
+        return `SOID ${order.soid}: vendor website order date is required when vendor is selected`;
+      }
+      // Check vendor_website_order_number
+      if (!draft.vendor_website_order_number || String(draft.vendor_website_order_number).trim() === '') {
+        return `SOID ${order.soid}: vendor website order number is required when vendor is selected`;
+      }
+    }
+
+    if (normalizedStatus === 'confirmed') {
+      const invalidItem = (order.items || []).find((item) => Number(item.unit_price || 0) <= 0);
+      if (invalidItem) {
+        return `SOID ${order.soid}: unit price must be greater than 0 for confirmed status (SKU ${invalidItem.sku})`;
+      }
     }
 
     const moneyFields = ['tax_total', 'shipping_total', 'discount_total', 'refund_total'];
@@ -664,6 +713,20 @@ export default function DashboardPage({ userEmail, onLogout }) {
       await updateSupplierOrder(order.soid, buildUpdatePayload(orderPayload));
       await loadSupplierOrders(Number(selectedOrder?.CSOID ?? selectedOrder?.csoid ?? 0));
       setSuccessMessage(`SOID ${order.soid} saved successfully.`);
+      
+      // Close edit mode after successful save
+      setEditingOrderKeys((prev) => {
+        const next = { ...prev };
+        delete next[orderKey];
+        return next;
+      });
+      
+      // Clear the draft for this order
+      setSupplierFinancialDrafts((prev) => {
+        const next = { ...prev };
+        delete next[orderKey];
+        return next;
+      });
     } catch (error) {
       setSupplierError(error.message || `Unable to save SOID ${order.soid}`);
     } finally {
@@ -693,6 +756,12 @@ export default function DashboardPage({ userEmail, onLogout }) {
       }
       if (normalizedStatus === 'backordered' && normalizedVendor.toLowerCase() !== 'none') {
         orderValidationErrors.push(`SOID ${order.soid}: vendor must be None when status is backordered`);
+      }
+      if (normalizedStatus === 'confirmed') {
+        const invalidItem = (order.items || []).find((item) => Number(item.unit_price || 0) <= 0);
+        if (invalidItem) {
+          orderValidationErrors.push(`SOID ${order.soid}: unit price must be greater than 0 for confirmed status (SKU ${invalidItem.sku})`);
+        }
       }
 
       const moneyFields = ['tax_total', 'shipping_total', 'discount_total', 'refund_total'];
@@ -832,8 +901,17 @@ export default function DashboardPage({ userEmail, onLogout }) {
 
               <button
                 type="button"
+                className="ghost"
+                onClick={() => setIsAssignmentEditing((prev) => !prev)}
+                disabled={items.length === 0}
+              >
+                {isAssignmentEditing ? 'Done' : 'Edit'}
+              </button>
+
+              <button
+                type="button"
                 onClick={generateSupplierOrders}
-                disabled={savingSupplier || items.length === 0}
+                disabled={savingSupplier || items.length === 0 || isAssignmentEditing}
               >
                 {savingSupplier ? 'Generating...' : 'Generate Supplier Orders'}
               </button>
@@ -877,6 +955,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
                         <td>
                           <select
                             value={entry.vendor_name || 'None'}
+                            disabled={!isAssignmentEditing}
                             onChange={(event) => handleAssignmentChange(skuKey, 'vendor_name', event.target.value)}
                           >
                             <option value="None">None</option>
@@ -889,7 +968,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
                           <input
                             type="text"
                             value={entry.unit_price || ''}
-                            disabled={(entry.vendor_name || 'None').toLowerCase() === 'none'}
+                            disabled={!isAssignmentEditing || (entry.vendor_name || 'None').toLowerCase() === 'none'}
                             onChange={(event) => handleAssignmentChange(skuKey, 'unit_price', event.target.value)}
                           />
                         </td>

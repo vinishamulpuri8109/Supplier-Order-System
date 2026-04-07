@@ -7,7 +7,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class SupplierOrderCreate(BaseModel):
@@ -132,6 +132,23 @@ class SupplierDashboardCreate(BaseModel):
         if v is None or int(v) <= 0:
             raise ValueError("Quantity must be > 0")
         return v
+
+    @model_validator(mode='after')
+    def validate_vendor_fields(self):
+        """When vendor is selected (not 'None'), all fields except comments must be provided."""
+        is_vendor_selected = self.vendorName.strip().lower() != 'none'
+        
+        if is_vendor_selected:
+            # Check that vendor order date is provided
+            if not self.vendorOrderDate or not self.vendorOrderDate.strip():
+                raise ValueError("Vendor order date is required when vendor is selected")
+            
+            # Check that vendor order number is provided
+            if not self.vendorOrderNumber or not self.vendorOrderNumber.strip():
+                raise ValueError("Vendor order number is required when vendor is selected")
+        
+        return self
+
 
 
 class SupplierOrderUpdate(BaseModel):
