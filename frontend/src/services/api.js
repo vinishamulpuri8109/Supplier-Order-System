@@ -20,6 +20,27 @@ async function parseJsonResponse(response) {
   return response.json();
 }
 
+function formatApiErrorDetail(detail) {
+  if (Array.isArray(detail)) {
+    return detail
+      .map((entry) => {
+        if (typeof entry === 'string') {
+          return entry;
+        }
+        if (entry && typeof entry === 'object') {
+          return entry.msg || entry.message || JSON.stringify(entry);
+        }
+        return String(entry);
+      })
+      .filter(Boolean)
+      .join(', ');
+  }
+  if (detail && typeof detail === 'object') {
+    return detail.msg || detail.message || JSON.stringify(detail);
+  }
+  return String(detail || '');
+}
+
 async function fetchWithFallback(paths, options = {}) {
   let lastError = null;
 
@@ -39,7 +60,7 @@ async function fetchWithFallback(paths, options = {}) {
       const data = await parseJsonResponse(response);
 
       if (!response.ok) {
-        const message = data?.detail || `Request failed with status ${response.status}`;
+        const message = data?.detail ? formatApiErrorDetail(data.detail) : `Request failed with status ${response.status}`;
         throw new Error(message);
       }
 
@@ -73,17 +94,17 @@ function normalizeItems(payload) {
 }
 
 export async function searchOrders({
-  csoid,
+  orderRef,
   filterType,
   filterDate,
   filterStartDate,
   filterEndDate,
 }) {
   const params = new URLSearchParams();
-  const trimmedCsoid = (csoid || '').trim();
+  const trimmedOrderRef = (orderRef || '').trim();
 
-  if (trimmedCsoid) {
-    params.set('csoid', trimmedCsoid);
+  if (trimmedOrderRef) {
+    params.set('orderRef', trimmedOrderRef);
   }
 
   if (filterType === 'range') {
@@ -110,7 +131,7 @@ export async function fetchOrderItems(csoid) {
 }
 
 export async function fetchNextOrderNumber() {
-  const data = await fetchWithFallback(['/supplier/next-order-number']);
+  const data = await fetchWithFallback(['/supplier/orders/next-order-number']);
   if (!data?.orderNumber) {
     throw new Error('No order number returned from server');
   }
@@ -118,23 +139,58 @@ export async function fetchNextOrderNumber() {
 }
 
 export async function checkSoidExists(soid) {
-  const data = await fetchWithFallback([`/supplier/soid-exists/${soid}`]);
+  const data = await fetchWithFallback([`/supplier/orders/soid-exists/${soid}`]);
   return Boolean(data?.exists);
 }
 
-export async function saveSupplierData(payload, context = {}) {
-  const selectedCsoid = Number(context.selectedOrder?.CSOID ?? context.selectedOrder?.csoid ?? 0);
-
-  const dashboardPayload = {
-    ...payload,
-    csoid: Number.isFinite(selectedCsoid) && selectedCsoid > 0 ? selectedCsoid : null,
-  };
-
-  return fetchWithFallback(['/supplier'], {
+export async function createSupplierOrders(payload) {
+  return fetchWithFallback(['/supplier/orders'], {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(dashboardPayload),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchSupplierOrders(csoid) {
+  const data = await fetchWithFallback([`/supplier/orders/${csoid}`]);
+  if (Array.isArray(data)) {
+    return data;
+  }
+  return [];
+}
+
+export async function fetchSupplierFollowupAlerts() {
+  const data = await fetchWithFallback(['/supplier/orders/follow-up-alerts']);
+  if (Array.isArray(data)) {
+    return data;
+  }
+  return [];
+}
+
+export async function updateSupplierOrder(soid, payload) {
+  return fetchWithFallback([`/supplier/orders/${soid}`], {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteSupplierOrder(soid) {
+  return fetchWithFallback([`/supplier/orders/${soid}`], {
+    method: 'DELETE',
+  });
+}
+
+export async function moveSupplierOrderSku(payload) {
+  return fetchWithFallback(['/supplier/orders/move-sku'], {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
   });
 }

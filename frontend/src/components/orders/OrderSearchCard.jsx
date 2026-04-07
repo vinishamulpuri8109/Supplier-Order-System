@@ -1,6 +1,6 @@
 const ORDER_COLUMNS = [
   'CSOID',
-  'CustOrderNumber',
+  'PO',
   'TaxAmount',
   'ShippingCharge',
   'Coupon',
@@ -19,7 +19,7 @@ const ORDER_COLUMNS = [
 
 const ORDER_FIELD_MAP = {
   CSOID: ['CSOID', 'csoid'],
-  CustOrderNumber: ['CustOrderNumber', 'po', 'order_number'],
+  PO: ['CustOrderNumber', 'po', 'order_number'],
   TaxAmount: ['TaxAmount', 'tax_amount'],
   ShippingCharge: ['ShippingCharge', 'shipping_charge'],
   Coupon: ['Coupon', 'coupon'],
@@ -89,8 +89,8 @@ export default function OrderSearchCard({
             type="text"
             value={csoidSearchValue}
             onChange={(event) => onCsoidSearchValueChange(event.target.value)}
-            placeholder="Search by CSOID"
-            aria-label="Search by CSOID"
+            placeholder="Search by PO"
+            aria-label="Search by PO"
           />
           <select
             value={filterType}
@@ -150,7 +150,7 @@ export default function OrderSearchCard({
             {!loading && orders.length === 0 ? (
               <tr>
                 <td colSpan={ORDER_COLUMNS.length} className="empty-cell">
-                  Search by CSOID, filter by day/week/range, or use both together.
+                  Search by PO, filter by day/week/range, or use both together.
                 </td>
               </tr>
             ) : null}

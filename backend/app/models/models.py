@@ -1,62 +1,88 @@
-"""
-SQLAlchemy ORM Models for the application.
-Defines database table structures and relationships.
-"""
+"""SQLAlchemy ORM models for application tables."""
 
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Date, Numeric, Text
+
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import relationship
+
 from app.db.database import Base
 
 
 class SupplierOrder(Base):
-    """
-    ORM Model for supplier_orders table.
-    
-    Attributes:
-        soid: Primary key (sequential order number)
-        csoid: Customer Order ID (from CustomerOrders table)
-        sku: Product SKU
-        quantity: Order quantity
-        supplier_name: Name of the supplier (manually entered by user)
-        status: Order status (default: "pending")
-        created_at: Timestamp when record was created
-    
-    Constraint:
-        - our_order_number is the primary key
-    """
-    
+    """Supplier order header grouped by vendor for a CSOID."""
+
     __tablename__ = "supplier_orders"
-    
-    # soid is the primary key
-    soid = Column("soid", String(100), primary_key=True, nullable=False)
-    website = Column(String(100), nullable=True)
-    vendor_order_date = Column(Date, nullable=True)
-    vendor_order_number = Column(String(100), nullable=True)
-    vendor_name = Column(String(255), nullable=True)
-    sku = Column(String(50), nullable=False)
-    csoid = Column(Integer, nullable=False)
-    po = Column(String(100), nullable=True)
-    quantity = Column(Integer, nullable=False)
-    supplier_name = Column(String(255), nullable=False)
-    unit_price = Column(Numeric(18, 2), nullable=True)
-    subtotal = Column(Numeric(18, 2), nullable=True)
-    tax = Column(Numeric(18, 2), nullable=True)
-    shipping = Column(Numeric(18, 2), nullable=True)
-    discount = Column(Numeric(18, 2), nullable=True)
-    grand_total = Column(Numeric(18, 2), nullable=True)
-    refund = Column(Numeric(18, 2), nullable=True)
+
+    soid = Column(Integer, primary_key=True, autoincrement=True)
+    csoid = Column(Integer, nullable=False, index=True)
+    cust_order_number = Column(String(100), nullable=True, index=True)
+    vendor_name = Column(String(255), nullable=False)
+    subtotal = Column(Numeric(10, 2), nullable=False, default=0)
+    tax_total = Column(Numeric(10, 2), nullable=False, default=0)
+    shipping_total = Column(Numeric(10, 2), nullable=False, default=0)
+    discount_total = Column(Numeric(10, 2), nullable=False, default=0)
+    refund_total = Column(Numeric(10, 2), nullable=False, default=0)
+    grand_total = Column(Numeric(10, 2), nullable=False, default=0)
+    vendor_website_order_date = Column(Date, nullable=True)
+    vendor_website_order_number = Column(String(255), nullable=True)
     comments = Column(Text, nullable=True)
-    
-    status = Column(String(50), default="pending", nullable=False)
+    status = Column(String(50), nullable=False, default="confirmed")
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    
-    __table_args__ = ()
-    
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    items = relationship(
+        "SupplierOrderItem",
+        back_populates="order",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        CheckConstraint("status in ('confirmed', 'backordered', 'cancelled', 'returned')", name="ck_supplier_orders_status"),
+    )
+
     def __repr__(self):
-        return (
-            f"<SupplierOrder(soid={self.soid}, csoid={self.csoid}, "
-            f"sku={self.sku}, supplier={self.supplier_name})>"
-        )
+        return f"<SupplierOrder(soid={self.soid}, csoid={self.csoid}, vendor={self.vendor_name})>"
+
+
+class SupplierOrderItem(Base):
+    """Line items for supplier orders."""
+
+    __tablename__ = "supplier_order_items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    soid = Column(Integer, ForeignKey("supplier_orders.soid", ondelete="CASCADE"), nullable=False, index=True)
+    csoid = Column(Integer, nullable=False, index=True)
+    cust_order_number = Column(String(100), nullable=True, index=True)
+    availability_status = Column(String(20), nullable=False, default="confirmed")
+    expected_date = Column(Date, nullable=True)
+    vendor_note = Column(String(255), nullable=True)
+    sku = Column(String(120), nullable=False)
+    product_name = Column(String(255), nullable=False)
+    quantity = Column(Integer, nullable=False)
+    unit_price = Column(Numeric(10, 2), nullable=False)
+    subtotal = Column(Numeric(10, 2), nullable=False)
+
+    order = relationship("SupplierOrder", back_populates="items")
+
+    __table_args__ = (
+        UniqueConstraint("csoid", "sku", name="uq_supplier_order_items_csoid_sku"),
+        UniqueConstraint("soid", "sku", name="uq_supplier_order_items_soid_sku"),
+    )
+
+    def __repr__(self):
+        return f"<SupplierOrderItem(id={self.id}, soid={self.soid}, csoid={self.csoid}, sku={self.sku})>"
 
 
 class User(Base):

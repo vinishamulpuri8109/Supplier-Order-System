@@ -1,27 +1,20 @@
 import AppShell from '../components/layout/AppShell';
 import OrderSearchCard from '../components/orders/OrderSearchCard';
 import OrderItemsTable from '../components/orders/OrderItemsTable';
-import SupplierOrderForm from '../components/supplier/SupplierOrderForm';
-import { useEffect, useMemo, useState } from 'react';
+import SupplierOrderCard from '../components/supplier/SupplierOrderCard';
+import { useMemo, useState } from 'react';
 import { WEBSITE_OPTIONS, WEBSITE_VENDOR_MAP } from '../constants/supplierOptions';
 import {
-  fetchNextOrderNumber,
+  createSupplierOrders,
   fetchOrderItems,
-  saveSupplierData,
+  fetchSupplierOrders,
   searchOrders,
+  updateSupplierOrder,
 } from '../services/api';
 
 const todayAsInputDate = () => new Date().toISOString().slice(0, 10);
-
-const toIsoWeekString = (date) => {
-  const utcDate = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const day = utcDate.getUTCDay() || 7;
-  utcDate.setUTCDate(utcDate.getUTCDate() + 4 - day);
-  const yearStart = new Date(Date.UTC(utcDate.getUTCFullYear(), 0, 1));
-  const weekNo = Math.ceil(((utcDate - yearStart) / 86400000 + 1) / 7);
-  const weekStr = String(weekNo).padStart(2, '0');
-  return `${utcDate.getUTCFullYear()}-W${weekStr}`;
-};
+const MONEY_INPUT_REGEX = /^\d*(?:\.\d{0,2})?$/;
+const ITEM_STATUSES = ['confirmed', 'backordered', 'cancelled', 'returned'];
 
 const weekInputToDate = (weekInput) => {
   const match = /^([0-9]{4})-W([0-9]{2})$/.exec(weekInput);
@@ -37,58 +30,100 @@ const weekInputToDate = (weekInput) => {
   return weekStart.toISOString().slice(0, 10);
 };
 
-const isValidSoid = (value) => {
-  return /^\d{5,}$/.test(value);
-};
-
-const MONEY_INPUT_REGEX = /^\d*(?:\.\d{0,2})?$/;
-const MONEY_FIELDS = new Set(['unitPrice', 'tax', 'shipping', 'discount', 'refund']);
-
 const roundToTwo = (value) => Number(Number(value || 0).toFixed(2));
+const formatMoney = (value) => Number(Number(value || 0).toFixed(2)).toFixed(2);
 
-const formatMoneyValue = (value) => {
-  if (value === '' || value === null || value === undefined) {
-    return '';
-  }
-
-  const parsedValue = Number(value);
-  if (!Number.isFinite(parsedValue)) {
-    return '';
-  }
-
-  return Number(parsedValue.toFixed(2)).toFixed(2);
-};
-
-const sanitizeMoneyInput = (nextValue, previousValue) => {
+function normalizeMoneyInput(nextValue, previousValue) {
   if (nextValue === '') {
     return '';
   }
-
   if (!MONEY_INPUT_REGEX.test(nextValue)) {
     return previousValue;
   }
-
   return nextValue;
-};
+}
 
-const toMoneyNumber = (value) => roundToTwo(value);
+function getItemKey(item) {
+  return String(item.Sku ?? item.sku ?? item.orderItemId ?? item.id ?? '');
+}
 
-const INITIAL_FORM_DATA = {
-  vendorOrderDate: '',
-  soid: '',
-  vendorOrderNumber: '',
-  vendorName: '',
-  sku: '',
-  unitPrice: '',
-  quantity: '',
-  subtotal: '',
-  tax: '',
-  shipping: '',
-  discount: '',
-  grandTotal: '',
-  refund: '',
-  comments: '',
-};
+function getOrderKey(order) {
+  return String(order?.soid ?? order?.draft_id ?? order?.vendor_name ?? '');
+}
+
+function resolveItemField(item, candidates) {
+  for (const key of candidates) {
+    if (item[key] !== undefined && item[key] !== null) {
+      return item[key];
+    }
+  }
+  return '';
+}
+
+function deriveOrderStatusFromItems(items) {
+  const statuses = new Set((items || []).map((item) => String(item.status || item.availability_status || 'confirmed').toLowerCase()));
+  if (statuses.has('backordered')) return 'backordered';
+  if (statuses.has('cancelled')) return 'cancelled';
+  if (statuses.has('returned')) return 'returned';
+  return 'confirmed';
+}
+
+function buildLocalSupplierOrders(csoid, assignments) {
+  const grouped = {};
+
+  for (const assignment of Object.values(assignments)) {
+    const vendor = String(assignment.vendor_name || 'None').trim() || 'None';
+    const itemStatus = vendor === 'None' ? 'backordered' : 'confirmed';
+    if (!grouped[vendor]) {
+      grouped[vendor] = [];
+    }
+
+    const quantity = Number(assignment.quantity || 0);
+    const unitPrice = vendor === 'None' ? 0 : roundToTwo(assignment.unit_price || 0);
+    const subtotal = roundToTwo(quantity * unitPrice);
+
+    grouped[vendor].push({
+      id: `${vendor}-${assignment.sku}`,
+      soid: 0,
+      csoid,
+      cust_order_number: assignment.cust_order_number || null,
+      status: itemStatus,
+      sku: String(assignment.sku || '').trim().toUpperCase(),
+      product_name: String(assignment.product_name || '').trim(),
+      quantity,
+      unit_price: unitPrice,
+      subtotal,
+    });
+  }
+
+  const vendors = Object.keys(grouped).sort((a, b) => a.localeCompare(b));
+
+  return vendors.map((vendor, index) => {
+    const draftId = `draft-${index + 1}`;
+    const items = grouped[vendor].map((item) => ({ ...item, draft_id: draftId }));
+    const subtotal = roundToTwo(items.reduce((acc, item) => acc + Number(item.subtotal || 0), 0));
+    const nonConfirmedItem = items.find((item) => item.status !== 'confirmed') || null;
+    const status = nonConfirmedItem ? nonConfirmedItem.status : 'confirmed';
+    return {
+      soid: null,
+      draft_id: draftId,
+      csoid,
+      vendor_name: vendor,
+      status,
+      subtotal,
+      tax_total: 0,
+      shipping_total: 0,
+      discount_total: 0,
+      refund_total: 0,
+      grand_total: subtotal,
+      vendor_website_order_date: null,
+      vendor_website_order_number: '',
+      comments: '',
+      items,
+      is_local_draft: true,
+    };
+  });
+}
 
 export default function DashboardPage({ userEmail, onLogout }) {
   const [csoidSearchValue, setCsoidSearchValue] = useState('');
@@ -96,178 +131,121 @@ export default function DashboardPage({ userEmail, onLogout }) {
   const [orderFilterDate, setOrderFilterDate] = useState(todayAsInputDate());
   const [orderFilterStartDate, setOrderFilterStartDate] = useState(todayAsInputDate());
   const [orderFilterEndDate, setOrderFilterEndDate] = useState(todayAsInputDate());
+
   const [orders, setOrders] = useState([]);
   const [items, setItems] = useState([]);
   const [selectedOrder, setSelectedOrder] = useState(null);
-  const [selectedItem, setSelectedItem] = useState(null);
   const [selectedWebsite, setSelectedWebsite] = useState('');
-  const [selectedVendor, setSelectedVendor] = useState('');
-  const [customVendorName, setCustomVendorName] = useState('');
-  const [formData, setFormData] = useState(INITIAL_FORM_DATA);
-  const [fieldErrors, setFieldErrors] = useState({});
+
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [itemsLoading, setItemsLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [supplierLoading, setSupplierLoading] = useState(false);
+  const [savingSupplier, setSavingSupplier] = useState(false);
+
   const [ordersError, setOrdersError] = useState('');
   const [itemsError, setItemsError] = useState('');
-  const [formError, setFormError] = useState('');
+  const [supplierError, setSupplierError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
+  const [skuAssignments, setSkuAssignments] = useState({});
+  const [assignmentErrors, setAssignmentErrors] = useState({});
+  const [supplierOrders, setSupplierOrders] = useState([]);
+  const [supplierFinancialDrafts, setSupplierFinancialDrafts] = useState({});
+  const [preparedSupplierPayload, setPreparedSupplierPayload] = useState(null);
   const vendorOptions = useMemo(() => {
-    const baseOptions = WEBSITE_VENDOR_MAP[selectedWebsite] || [];
-    if (baseOptions.includes('Other')) {
-      return baseOptions;
-    }
-    return [...baseOptions, 'Other'];
-  }, [selectedWebsite]);
+    const fromWebsite = WEBSITE_VENDOR_MAP[selectedWebsite] || [];
+    const fromAssignments = Object.values(skuAssignments)
+      .map((entry) => (entry?.vendor_name || '').trim())
+      .filter((value) => Boolean(value) && value !== 'None');
+    const fromOrders = supplierOrders.map((order) => order.vendor_name).filter(Boolean);
+    return ['None', ...new Set([...fromWebsite, ...fromAssignments, ...fromOrders])];
+  }, [selectedWebsite, skuAssignments, supplierOrders]);
 
-  useEffect(() => {
-    setSelectedVendor('');
-    setCustomVendorName('');
-  }, [selectedWebsite]);
-
-  useEffect(() => {
-    if (!orderFilterType) {
-      return;
-    }
-    if (orderFilterType === 'week') {
-      if (!orderFilterDate || !orderFilterDate.includes('W')) {
-        const anchorDate = orderFilterDate ? new Date(orderFilterDate) : new Date();
-        setOrderFilterDate(toIsoWeekString(anchorDate));
-      }
-      return;
-    }
-    if (orderFilterType === 'range') {
-      if (!orderFilterStartDate) {
-        setOrderFilterStartDate(todayAsInputDate());
-      }
-      if (!orderFilterEndDate) {
-        setOrderFilterEndDate(todayAsInputDate());
-      }
-      return;
-    }
-    if (orderFilterDate.includes('W')) {
-      setOrderFilterDate(todayAsInputDate());
-    }
-  }, [orderFilterType, orderFilterDate, orderFilterStartDate, orderFilterEndDate]);
-
-  useEffect(() => {
-    let isActive = true;
-    const orderId = selectedOrder?.CSOID ?? selectedOrder?.csoid ?? null;
-
-    if (!orderId || !selectedItem) {
-      setFormData((prev) => ({
-        ...prev,
-        soid: '',
-      }));
-      return () => {
-        isActive = false;
+  const initializeAssignments = (fetchedItems) => {
+    const nextAssignments = {};
+    for (const item of fetchedItems) {
+      const key = getItemKey(item);
+      nextAssignments[key] = {
+        sku: String(resolveItemField(item, ['Sku', 'sku'])).toUpperCase(),
+        product_name: String(resolveItemField(item, ['ProductName', 'product_name'])) || String(resolveItemField(item, ['Sku', 'sku'])),
+        quantity: Number(resolveItemField(item, ['Quantity', 'quantity']) || 0),
+        cust_order_number: String(selectedOrder?.CustOrderNumber ?? selectedOrder?.cust_order_number ?? '').trim(),
+        status: 'backordered',
+        vendor_name: 'None',
+        unit_price: '0.00',
       };
     }
+    setSkuAssignments(nextAssignments);
+    setAssignmentErrors({});
+  };
 
-    setFormData((prev) => ({
-      ...prev,
-      soid: '',
-    }));
+  const loadSupplierOrders = async (csoid) => {
+    if (!csoid) {
+      setSupplierOrders([]);
+      return;
+    }
 
-    fetchNextOrderNumber()
-      .then((orderNumber) => {
-        if (!isActive) {
-          return;
+    setSupplierLoading(true);
+    setSupplierError('');
+    try {
+      const data = await fetchSupplierOrders(csoid);
+      setSupplierOrders(data);
+      setSupplierFinancialDrafts((prev) => {
+        const next = {};
+        for (const order of data) {
+          const orderKey = getOrderKey(order);
+          const current = prev[orderKey] || {};
+          next[orderKey] = {
+            vendor_name: current.vendor_name ?? (order.vendor_name || 'None'),
+            vendor_website_order_date: current.vendor_website_order_date ?? (order.vendor_website_order_date || ''),
+            vendor_website_order_number: current.vendor_website_order_number ?? (order.vendor_website_order_number || ''),
+            status: current.status ?? (order.status || 'confirmed'),
+            tax_total: current.tax_total ?? formatMoney(order.tax_total),
+            shipping_total: current.shipping_total ?? formatMoney(order.shipping_total),
+            discount_total: current.discount_total ?? formatMoney(order.discount_total),
+            refund_total: current.refund_total ?? formatMoney(order.refund_total),
+            comments: current.comments ?? (order.comments || ''),
+          };
         }
-        setFormData((prev) => ({
-          ...prev,
-          soid: orderNumber,
-        }));
-      })
-      .catch(() => {
-        if (!isActive) {
-          return;
-        }
-        setFormError('Unable to generate order number');
+        return next;
       });
-
-    return () => {
-      isActive = false;
-    };
-  }, [selectedOrder, selectedItem]);
-
-  useEffect(() => {
-    setFormData((prev) => ({
-      ...prev,
-      sku: String(selectedItem?.Sku ?? selectedItem?.sku ?? ''),
-      quantity: String(selectedItem?.Quantity ?? selectedItem?.quantity ?? ''),
-    }));
-  }, [selectedItem]);
-
-  useEffect(() => {
-    const resolvedVendor = selectedVendor === 'Other' ? customVendorName : selectedVendor;
-    setFormData((prev) => ({
-      ...prev,
-      vendorName: resolvedVendor,
-    }));
-  }, [selectedVendor, customVendorName]);
-
-  useEffect(() => {
-    const quantity = Number(formData.quantity || 0);
-    const unitPrice = Number(formData.unitPrice || 0);
-
-    if (!quantity || !unitPrice) {
-      setFormData((prev) => ({
-        ...prev,
-        subtotal: '',
-      }));
-      return;
+    } catch (error) {
+      setSupplierOrders([]);
+      setSupplierFinancialDrafts({});
+      setSupplierError(error.message || 'Unable to load supplier orders');
+    } finally {
+      setSupplierLoading(false);
     }
-
-    const calculatedSubtotal = roundToTwo(quantity * unitPrice);
-
-    setFormData((prev) => ({
-      ...prev,
-      subtotal: calculatedSubtotal.toFixed(2),
-    }));
-  }, [formData.quantity, formData.unitPrice]);
-
-  useEffect(() => {
-    if (!formData.subtotal) {
-      setFormData((prev) => ({
-        ...prev,
-        grandTotal: '',
-      }));
-      return;
-    }
-
-    const subtotal = Number(formData.subtotal || 0);
-    const tax = Number(formData.tax || 0);
-    const shipping = Number(formData.shipping || 0);
-    const discount = Number(formData.discount || 0);
-    const total = roundToTwo(subtotal + tax + shipping - discount);
-
-    setFormData((prev) => ({
-      ...prev,
-      grandTotal: total.toFixed(2),
-    }));
-  }, [formData.subtotal, formData.tax, formData.shipping, formData.discount]);
+  };
 
   const loadOrderItems = async (order) => {
-    const csoid = order?.CSOID ?? order?.csoid;
+    const csoid = Number(order?.CSOID ?? order?.csoid ?? 0);
     if (!csoid) {
       setItems([]);
-      setSelectedItem(null);
+      setSkuAssignments({});
+      setSupplierOrders([]);
+      setSupplierFinancialDrafts({});
+      setPreparedSupplierPayload(null);
       return;
     }
 
     setItemsLoading(true);
     setItemsError('');
-    setItems([]);
+    setSupplierError('');
+    setSuccessMessage('');
+    setPreparedSupplierPayload(null);
 
     try {
       const fetchedItems = await fetchOrderItems(csoid);
       setItems(fetchedItems);
-      setSelectedItem(fetchedItems.length > 0 ? fetchedItems[0] : null);
+      initializeAssignments(fetchedItems);
+      await loadSupplierOrders(csoid);
     } catch (error) {
+      setItems([]);
+      setSkuAssignments({});
       setItemsError(error.message || 'Unable to load order items');
-      setSelectedItem(null);
+      setSupplierOrders([]);
+      setSupplierFinancialDrafts({});
     } finally {
       setItemsLoading(false);
     }
@@ -283,37 +261,37 @@ export default function DashboardPage({ userEmail, onLogout }) {
         orderFilterType === 'week'
           ? weekInputToDate(orderFilterDate) || todayAsInputDate()
           : orderFilterDate;
+
       const results = await searchOrders({
-        csoid: csoidSearchValue,
+        orderRef: csoidSearchValue,
         filterType: orderFilterType,
         filterDate: resolvedFilterDate,
         filterStartDate: orderFilterStartDate,
         filterEndDate: orderFilterEndDate,
       });
+
       setOrders(results);
-      setSelectedItem(null);
       setItems([]);
+      setSupplierOrders([]);
+      setSupplierFinancialDrafts({});
+      setPreparedSupplierPayload(null);
 
       if (results.length > 0) {
         setSelectedOrder(results[0]);
-        loadOrderItems(results[0]);
+        await loadOrderItems(results[0]);
       } else {
         setSelectedOrder(null);
+        setSkuAssignments({});
       }
     } catch (error) {
-      const rawMessage = error?.message || 'Unable to fetch orders';
-      const searchingByCsoid = Boolean((csoidSearchValue || '').trim());
-      const isAuthTokenError = /invalid authentication token|not authenticated|unauthorized/i.test(rawMessage);
-
-      if (searchingByCsoid && isAuthTokenError) {
-        setOrdersError('CSOID does not exist');
-      } else {
-        setOrdersError(rawMessage);
-      }
+      setOrdersError(error?.message || 'Unable to fetch orders');
       setOrders([]);
       setSelectedOrder(null);
-      setSelectedItem(null);
       setItems([]);
+      setSkuAssignments({});
+      setSupplierOrders([]);
+      setSupplierFinancialDrafts({});
+      setPreparedSupplierPayload(null);
     } finally {
       setOrdersLoading(false);
     }
@@ -321,216 +299,362 @@ export default function DashboardPage({ userEmail, onLogout }) {
 
   const handleSelectOrder = (order) => {
     setSelectedOrder(order);
-    setSelectedItem(null);
-    setSuccessMessage('');
     loadOrderItems(order);
   };
 
-  const handleSelectItem = (item) => {
-    setSelectedItem(item);
-    setSuccessMessage('');
+  const handleAssignmentChange = (skuKey, field, value) => {
+    setSkuAssignments((prev) => {
+      const current = prev[skuKey] || {};
+      const nextValue = field === 'unit_price' ? normalizeMoneyInput(value, current[field]) : value;
+      const nextRow = {
+        ...current,
+        [field]: nextValue,
+      };
+
+      const nextVendor = String(nextRow.vendor_name || 'None').trim() || 'None';
+      nextRow.status = nextVendor.toLowerCase() === 'none' ? 'backordered' : 'confirmed';
+      if (nextRow.status !== 'confirmed') {
+        nextRow.vendor_name = 'None';
+        nextRow.unit_price = '0.00';
+      }
+      if (field === 'vendor_name' && String(value || '').trim().toLowerCase() !== 'none') {
+        nextRow.vendor_name = value;
+        nextRow.unit_price = current.unit_price === '0.00' ? '' : nextRow.unit_price;
+      }
+
+      return {
+        ...prev,
+        [skuKey]: nextRow,
+      };
+    });
+
+    setAssignmentErrors((prev) => {
+      if (!prev[skuKey]) {
+        return prev;
+      }
+      const next = { ...prev };
+      delete next[skuKey];
+      return next;
+    });
   };
 
-  const handleFormChange = (field, value) => {
-    const clearFieldError = () => {
-      setFieldErrors((prev) => {
-        if (!prev[field]) {
-          return prev;
-        }
-        const next = { ...prev };
-        delete next[field];
-        return next;
-      });
-    };
-
-    if (field === 'quantity') {
-      const cleaned = value.replace(/[^0-9]/g, '');
-      setFormData((prev) => ({
-        ...prev,
-        [field]: cleaned,
-      }));
-      clearFieldError();
-      return;
-    }
-
-    if (MONEY_FIELDS.has(field)) {
-      setFormData((prev) => ({
-        ...prev,
-        [field]: sanitizeMoneyInput(value, prev[field]),
-      }));
-      clearFieldError();
-      return;
-    }
-
-    setFormData((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
-    clearFieldError();
-  };
-
-  const validateForm = () => {
+  const validateAssignments = () => {
     const errors = {};
-    const today = todayAsInputDate();
 
-    if (!formData.soid) {
-      errors.soid = 'SOID is required';
-    } else if (!isValidSoid(formData.soid)) {
-      errors.soid = 'SOID must be a positive integer';
+    for (const [key, assignment] of Object.entries(skuAssignments)) {
+      const rowErrors = [];
+      const unitPrice = Number(assignment.unit_price || 0);
+      const quantity = Number(assignment.quantity || 0);
+      const itemStatus = String(assignment.vendor_name || 'None').trim().toLowerCase() === 'none' ? 'backordered' : 'confirmed';
+
+      if (!ITEM_STATUSES.includes(itemStatus)) {
+        rowErrors.push('Status is invalid');
+      }
+
+      if (itemStatus === 'confirmed' && !(assignment.vendor_name || '').trim()) {
+        rowErrors.push('Vendor is required');
+      }
+      if (!MONEY_INPUT_REGEX.test(String(assignment.unit_price || ''))) {
+        rowErrors.push('Unit price can have at most 2 decimals');
+      } else if (itemStatus === 'confirmed' && (!Number.isFinite(unitPrice) || unitPrice <= 0)) {
+        rowErrors.push('Unit price must be greater than 0');
+      }
+      if (!Number.isInteger(quantity) || quantity <= 0) {
+        rowErrors.push('Quantity must be greater than 0');
+      }
+
+      if (rowErrors.length > 0) {
+        errors[key] = rowErrors.join(' | ');
+      }
     }
 
-    const csoidValue = Number(selectedOrder?.CSOID ?? selectedOrder?.csoid ?? 0);
-    if (!Number.isInteger(csoidValue) || csoidValue <= 0) {
-      errors.csoid = 'CSOID is required';
-    }
-
-    const poValue = String(
-      selectedOrder?.CustOrderNumber ?? selectedOrder?.po ?? selectedOrder?.order_number ?? '',
-    ).trim();
-    if (!poValue) {
-      errors.po = 'PO is required';
-    }
-
-    if (!formData.sku) {
-      errors.sku = 'SKU is required';
-    }
-
-    if (!selectedWebsite) {
-      errors.website = 'Website is required';
-    }
-
-    if (!formData.vendorName) {
-      errors.vendorName = 'Vendor is required';
-    }
-
-    if (!formData.vendorOrderDate) {
-      errors.vendorOrderDate = 'Vendor order date is required';
-    } else if (formData.vendorOrderDate > today) {
-      errors.vendorOrderDate = 'Vendor order date cannot be in the future';
-    }
-
-    if (!formData.vendorOrderNumber) {
-      errors.vendorOrderNumber = 'Vendor order number is required';
-    }
-
-    const unitPrice = toMoneyNumber(formData.unitPrice);
-    const quantity = Number(formData.quantity || 0);
-    const subtotal = toMoneyNumber(formData.subtotal);
-    const tax = toMoneyNumber(formData.tax);
-    const shipping = toMoneyNumber(formData.shipping);
-    const discount = toMoneyNumber(formData.discount);
-    const grandTotal = toMoneyNumber(formData.grandTotal);
-    const refund = toMoneyNumber(formData.refund);
-
-    if (unitPrice <= 0) {
-      errors.unitPrice = 'Unit price must be greater than 0';
-    }
-
-    if (!Number.isInteger(quantity) || quantity <= 0) {
-      errors.quantity = 'Quantity must be an integer greater than 0';
-    }
-
-    const expectedSubtotal = roundToTwo(unitPrice * quantity);
-    if (subtotal < 0 || subtotal !== expectedSubtotal) {
-      errors.subtotal = 'Subtotal must equal unit price * quantity';
-    }
-
-    if (tax < 0) {
-      errors.tax = 'Tax must be >= 0';
-    }
-
-    if (shipping < 0) {
-      errors.shipping = 'Shipping must be >= 0';
-    }
-
-    if (discount < 0 || discount > subtotal) {
-      errors.discount = 'Discount must be >= 0 and <= subtotal';
-    }
-
-    const expectedGrandTotal = roundToTwo(subtotal + tax + shipping - discount);
-    if (grandTotal < 0 || grandTotal !== expectedGrandTotal) {
-      errors.grandTotal = 'Grand total must equal subtotal + tax + shipping - discount';
-    }
-
-    if (refund < 0) {
-      errors.refund = 'Refund must be >= 0';
-    }
-
-    setFieldErrors(errors);
+    setAssignmentErrors(errors);
     return Object.keys(errors).length === 0;
   };
 
-  const handleSaveSupplierData = async () => {
-    if (!selectedOrder) {
-      setFormError('Select an order before saving supplier data');
+  const generateSupplierOrders = async () => {
+    const csoid = Number(selectedOrder?.CSOID ?? selectedOrder?.csoid ?? 0);
+    if (!csoid || items.length === 0) {
+      setSupplierError('Select an order with items first');
       return;
     }
 
-    if (!validateForm()) {
-      setFormError('Please fix required fields before saving');
+    if (!validateAssignments()) {
+      setSupplierError('Fix SKU assignment errors before generating supplier orders');
       return;
     }
 
-    setSaving(true);
-    setFormError('');
+    setSavingSupplier(true);
+    setSupplierError('');
     setSuccessMessage('');
 
-    const payload = {
-      po: String(selectedOrder?.CustOrderNumber ?? selectedOrder?.po ?? selectedOrder?.order_number ?? '').trim(),
-      vendorOrderDate: formData.vendorOrderDate,
-      soid: formData.soid,
-      vendorOrderNumber: formData.vendorOrderNumber.trim(),
-      vendorName: formData.vendorName,
-      sku: formData.sku,
-      unitPrice: toMoneyNumber(formData.unitPrice),
-      quantity: Number(formData.quantity || 0),
-      subtotal: toMoneyNumber(formData.subtotal),
-      tax: toMoneyNumber(formData.tax),
-      shipping: toMoneyNumber(formData.shipping),
-      discount: toMoneyNumber(formData.discount),
-      grandTotal: toMoneyNumber(formData.grandTotal),
-      refund: toMoneyNumber(formData.refund),
-      comments: formData.comments.trim(),
-      website: selectedWebsite,
-    };
-
     try {
-      const response = await saveSupplierData(payload, { selectedOrder, selectedItem });
-      const savedSoid = response?.supplierOrder?.soid ? String(response.supplierOrder.soid) : formData.soid;
-      setFormData((prev) => ({
-        ...prev,
-        soid: savedSoid,
-      }));
-      setSuccessMessage('Supplier data saved successfully');
+      const generatedOrders = buildLocalSupplierOrders(csoid, skuAssignments);
+      const custOrderNumber = String(selectedOrder?.CustOrderNumber ?? selectedOrder?.cust_order_number ?? '').trim();
+      const createPayload = {
+        csoid,
+        cust_order_number: custOrderNumber || null,
+        items: generatedOrders.flatMap((orderPayload) =>
+          (orderPayload.items || []).map((item) => ({
+            cust_order_number: custOrderNumber || null,
+            sku: String(item.sku || '').trim().toUpperCase(),
+            status: String(item.status || 'confirmed').toLowerCase(),
+            product_name: String(item.product_name || '').trim(),
+            quantity: Number(item.quantity || 0),
+            vendor_name: String(orderPayload.vendor_name || 'None').trim() || 'None',
+            unit_price: roundToTwo(item.unit_price),
+            vendor_website_order_date: orderPayload.vendor_website_order_date || null,
+            vendor_website_order_number: (orderPayload.vendor_website_order_number || '').trim(),
+          }))
+        ),
+      };
 
-      fetchNextOrderNumber()
-        .then((nextOrderNumber) => {
-          setFormData((prev) => ({
-            ...prev,
-            soid: nextOrderNumber,
-          }));
-        })
-        .catch(() => {});
+      await createSupplierOrders(createPayload);
+      const persistedOrders = await fetchSupplierOrders(csoid);
+      setSupplierOrders(persistedOrders);
+      setSupplierFinancialDrafts(
+        Object.fromEntries(
+          persistedOrders.map((order) => [
+            getOrderKey(order),
+            {
+              vendor_website_order_date: order.vendor_website_order_date || '',
+              vendor_website_order_number: order.vendor_website_order_number || '',
+              status: order.status || 'confirmed',
+              tax_total: formatMoney(order.tax_total),
+              shipping_total: formatMoney(order.shipping_total),
+              discount_total: formatMoney(order.discount_total),
+              refund_total: formatMoney(order.refund_total),
+              comments: order.comments || '',
+            },
+          ])
+        )
+      );
+      setSuccessMessage('Supplier orders created. Review the saved SOIDs and fill in the fields below.');
+      setPreparedSupplierPayload(null);
     } catch (error) {
-      setFormError(error.message || 'Unable to save supplier data');
+      setSupplierError(error.message || 'Unable to generate supplier orders');
     } finally {
-      setSaving(false);
+      setSavingSupplier(false);
     }
   };
 
-  const handleClearForm = () => {
-    setSelectedWebsite('');
-    setSelectedVendor('');
-    setCustomVendorName('');
-    setFormData((prev) => ({
-      ...INITIAL_FORM_DATA,
-      soid: prev.soid,
-      sku: prev.sku,
-      quantity: prev.quantity,
+  const handleFinancialDraftChange = (soid, field, value) => {
+    setPreparedSupplierPayload(null);
+    if (field === 'status' || field === 'vendor_name') {
+      const normalized = String(value || 'confirmed').toLowerCase();
+      setSupplierOrders((prev) => prev.map((order) => {
+        if (getOrderKey(order) !== String(soid)) {
+          return order;
+        }
+        const nextStatus = field === 'vendor_name'
+          ? (normalized === 'none' ? 'backordered' : (order.status === 'backordered' ? 'confirmed' : order.status))
+          : normalized;
+        return {
+          ...order,
+          status: nextStatus,
+          vendor_name: field === 'vendor_name' ? (value || 'None') : order.vendor_name,
+        };
+      }));
+    }
+    setSupplierFinancialDrafts((prev) => {
+      const orderKey = String(soid);
+      const current = prev[orderKey] || {
+        vendor_name: 'None',
+        vendor_website_order_date: '',
+        vendor_website_order_number: '',
+        status: 'confirmed',
+        tax_total: '0.00',
+        shipping_total: '0.00',
+        discount_total: '0.00',
+        refund_total: '0.00',
+        comments: '',
+      };
+
+      if (field === 'comments' || field === 'vendor_website_order_date' || field === 'vendor_website_order_number' || field === 'status' || field === 'vendor_name') {
+        const nextValue = field === 'vendor_name' ? (value || 'None') : value;
+        return {
+          ...prev,
+          [orderKey]: {
+            ...current,
+            [field]: nextValue,
+            ...(field === 'vendor_name' && String(nextValue).toLowerCase() === 'none' ? { status: 'backordered' } : {}),
+            ...(field === 'vendor_name' && String(nextValue).toLowerCase() !== 'none' && current.status === 'backordered' ? { status: 'confirmed' } : {}),
+          },
+        };
+      }
+
+      return {
+        ...prev,
+        [orderKey]: {
+          ...current,
+          [field]: normalizeMoneyInput(value, current[field]),
+        },
+      };
+    });
+  };
+
+  const handleOrderItemChange = (soid, itemId, field, value) => {
+    setPreparedSupplierPayload(null);
+    setSupplierOrders((prev) => prev.map((order) => {
+      if (getOrderKey(order) !== String(soid)) {
+        return order;
+      }
+      const nextItems = (order.items || []).map((item) => {
+        if (item.id !== itemId) {
+          return item;
+        }
+        const nextItem = { ...item };
+        if (field === 'quantity') {
+          const parsed = Number(value);
+          nextItem.quantity = Number.isFinite(parsed) && parsed > 0 ? parsed : item.quantity;
+        } else if (field === 'unit_price') {
+          nextItem.unit_price = normalizeMoneyInput(String(value), String(item.unit_price));
+        }
+        nextItem.status = String(order.status || 'confirmed').toLowerCase();
+        nextItem.availability_status = nextItem.status;
+        if (nextItem.status !== 'confirmed') {
+          nextItem.unit_price = '0.00';
+        }
+        nextItem.subtotal = roundToTwo(Number(nextItem.quantity || 0) * Number(nextItem.unit_price || 0));
+        return nextItem;
+      });
+      const nextSubtotal = roundToTwo(nextItems.reduce((acc, item) => acc + Number(item.subtotal || 0), 0));
+      return {
+        ...order,
+        items: nextItems,
+        subtotal: nextSubtotal,
+        status: deriveOrderStatusFromItems(nextItems),
+      };
     }));
-    setFieldErrors({});
-    setFormError('');
-    setSuccessMessage('');
+  };
+
+  const getGrandTotalPreview = (order) => {
+    const draft = supplierFinancialDrafts[getOrderKey(order)] || {};
+    const subtotal = roundToTwo(order.subtotal || 0);
+    const tax = roundToTwo(draft.tax_total || 0);
+    const shipping = roundToTwo(draft.shipping_total || 0);
+    const discount = roundToTwo(draft.discount_total || 0);
+    const refund = roundToTwo(draft.refund_total || 0);
+    return roundToTwo(subtotal + tax + shipping - discount - refund);
+  };
+
+  const prepareSupplierOrdersPayload = async () => {
+    if (supplierOrders.length === 0) {
+      setSupplierError('Generate supplier orders before final save');
+      return;
+    }
+
+    const orderValidationErrors = [];
+
+    for (const order of supplierOrders) {
+      const draft = supplierFinancialDrafts[getOrderKey(order)] || {};
+      const normalizedVendor = String(draft.vendor_name || order.vendor_name || '').trim() || 'None';
+      const normalizedStatus = String(draft.status || order.status || 'confirmed').toLowerCase();
+
+      if (normalizedStatus === 'confirmed' && normalizedVendor.toLowerCase() === 'none') {
+        orderValidationErrors.push(`SOID ${order.soid}: vendor is required when status is confirmed`);
+      }
+      if (normalizedStatus === 'backordered' && normalizedVendor.toLowerCase() !== 'none') {
+        orderValidationErrors.push(`SOID ${order.soid}: vendor must be None when status is backordered`);
+      }
+
+      const moneyFields = ['tax_total', 'shipping_total', 'discount_total', 'refund_total'];
+      for (const field of moneyFields) {
+        const raw = String(draft[field] ?? '0.00');
+        if (!MONEY_INPUT_REGEX.test(raw)) {
+          orderValidationErrors.push(`SOID ${order.soid}: ${field} must have at most 2 decimals`);
+          continue;
+        }
+        if (Number(raw || 0) < 0) {
+          orderValidationErrors.push(`SOID ${order.soid}: ${field} must be >= 0`);
+        }
+      }
+
+      if (Number(draft.discount_total || 0) > Number(order.subtotal || 0)) {
+        orderValidationErrors.push(`SOID ${order.soid}: discount cannot exceed subtotal`);
+      }
+    }
+
+    if (orderValidationErrors.length > 0) {
+      setSupplierError(orderValidationErrors[0]);
+      return;
+    }
+
+    const csoid = Number(selectedOrder?.CSOID ?? selectedOrder?.csoid ?? 0);
+    const payload = {
+      csoid,
+      supplier_orders: supplierOrders.map((order) => {
+        const draft = supplierFinancialDrafts[order.soid] || {};
+        const normalizedVendor = String(draft.vendor_name || order.vendor_name || 'None').trim() || 'None';
+        const normalizedStatus = String(draft.status || order.status || 'confirmed').toLowerCase();
+        return {
+          soid: order.soid,
+          csoid: order.csoid,
+          cust_order_number: String(selectedOrder?.CustOrderNumber ?? selectedOrder?.cust_order_number ?? '').trim() || null,
+          vendor_name: normalizedVendor,
+          status: normalizedStatus,
+          vendor_website_order_date: draft.vendor_website_order_date || null,
+          vendor_website_order_number: (draft.vendor_website_order_number || '').trim(),
+          comments: (draft.comments || '').trim(),
+          subtotal: roundToTwo(order.subtotal || 0),
+          tax_total: roundToTwo(draft.tax_total || 0),
+          shipping_total: roundToTwo(draft.shipping_total || 0),
+          discount_total: roundToTwo(draft.discount_total || 0),
+          refund_total: roundToTwo(draft.refund_total || 0),
+          grand_total: getGrandTotalPreview(order),
+          items: (order.items || []).map((item) => ({
+            id: item.id,
+            soid: item.soid,
+            csoid: item.csoid,
+            sku: item.sku,
+            status: normalizedStatus,
+            product_name: item.product_name,
+            quantity: item.quantity,
+            unit_price: roundToTwo(item.unit_price || 0),
+            subtotal: roundToTwo(item.subtotal || 0),
+          })),
+        };
+      }),
+    };
+
+    setSupplierError('');
+    setPreparedSupplierPayload(payload);
+
+    setSavingSupplier(true);
+    try {
+      const csoidValue = Number(selectedOrder?.CSOID ?? selectedOrder?.csoid ?? 0);
+      const buildUpdatePayload = (orderPayload) => ({
+        tax_total: roundToTwo(orderPayload.tax_total || 0),
+        shipping_total: roundToTwo(orderPayload.shipping_total || 0),
+        discount_total: roundToTwo(orderPayload.discount_total || 0),
+        refund_total: roundToTwo(orderPayload.refund_total || 0),
+        comments: (orderPayload.comments || '').trim(),
+        status: (orderPayload.status || 'confirmed').toLowerCase(),
+        vendor_name: String(orderPayload.vendor_name || 'None').trim() || 'None',
+        items: (orderPayload.items || []).map((item) => ({
+          id: item.id,
+          quantity: Number(item.quantity || 0),
+          unit_price: roundToTwo(item.unit_price || 0),
+          status: (item.status || 'confirmed').toLowerCase(),
+        })),
+        vendor_website_order_date: orderPayload.vendor_website_order_date || null,
+        vendor_website_order_number: (orderPayload.vendor_website_order_number || '').trim(),
+      });
+
+      for (const orderPayload of payload.supplier_orders) {
+        if (!orderPayload.soid) {
+          continue;
+        }
+        await updateSupplierOrder(orderPayload.soid, buildUpdatePayload(orderPayload));
+      }
+
+      await loadSupplierOrders(csoidValue);
+      setSuccessMessage('Supplier orders saved successfully.');
+    } catch (error) {
+      setSupplierError(error.message || 'Unable to save supplier orders');
+    } finally {
+      setSavingSupplier(false);
+    }
   };
 
   return (
@@ -560,51 +684,153 @@ export default function DashboardPage({ userEmail, onLogout }) {
             items={items}
             loading={itemsLoading}
             error={itemsError}
-            selectedItem={selectedItem}
-            onSelectItem={handleSelectItem}
+            selectedItem={null}
+            onSelectItem={() => {}}
           />
         </section>
 
         <section className="dashboard-half supplier-entry-half">
-          <h2 className="section-heading">Supplier Entry</h2>
-          <SupplierOrderForm
-            selectedOrder={selectedOrder}
-            selectedWebsite={selectedWebsite}
-            selectedVendor={selectedVendor}
-            customVendorName={customVendorName}
-            websiteOptions={WEBSITE_OPTIONS}
-            vendorOptions={vendorOptions}
-            onWebsiteChange={setSelectedWebsite}
-            onVendorChange={setSelectedVendor}
-            onCustomVendorNameChange={setCustomVendorName}
-            formData={formData}
-            fieldErrors={fieldErrors}
-            formError={formError}
-            successMessage={successMessage}
-            saving={saving}
-            onFormChange={handleFormChange}
-            onFormBlur={(field, value) => {
-              if (!MONEY_FIELDS.has(field) && field !== 'quantity') {
-                return;
-              }
+          <h2 className="section-heading">Supplier Orders</h2>
 
-              if (field === 'quantity') {
-                const cleaned = value.replace(/[^0-9]/g, '');
-                setFormData((prev) => ({
-                  ...prev,
-                  quantity: cleaned,
-                }));
-                return;
-              }
+          {supplierError ? <p className="status-text error-text">{supplierError}</p> : null}
+          {successMessage ? <p className="status-text success-text">{successMessage}</p> : null}
 
-              setFormData((prev) => ({
-                ...prev,
-                [field]: formatMoneyValue(value),
-              }));
-            }}
-            onSave={handleSaveSupplierData}
-            onClear={handleClearForm}
-          />
+          <section className="panel">
+            <div className="panel-head">
+              <h3>Assign Vendor + Unit Price (preloaded SKUs only)</h3>
+            </div>
+
+            <div className="assignment-controls">
+              <label>
+                Website
+                <select value={selectedWebsite} onChange={(event) => setSelectedWebsite(event.target.value)}>
+                  <option value="">Select website</option>
+                  {WEBSITE_OPTIONS.map((website) => (
+                    <option key={website} value={website}>{website}</option>
+                  ))}
+                </select>
+              </label>
+
+              <button
+                type="button"
+                onClick={generateSupplierOrders}
+                disabled={savingSupplier || items.length === 0}
+              >
+                {savingSupplier ? 'Generating...' : 'Generate Supplier Orders'}
+              </button>
+            </div>
+
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>SKU</th>
+                    <th>Product</th>
+                    <th>Qty</th>
+                    <th>Vendor</th>
+                    <th>Unit Price</th>
+                    <th>Subtotal</th>
+                    <th>Error</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="empty-cell">
+                        Select a CSOID and load items first.
+                      </td>
+                    </tr>
+                  ) : null}
+
+                  {items.map((item) => {
+                    const skuKey = getItemKey(item);
+                    const entry = skuAssignments[skuKey] || {};
+                    const errorText = assignmentErrors[skuKey] || '';
+                    const qty = Number(entry.quantity || 0);
+                    const unitPrice = Number(entry.unit_price || 0);
+                    const subtotal = roundToTwo(qty * unitPrice);
+
+                    return (
+                      <tr key={skuKey}>
+                        <td>{entry.sku || resolveItemField(item, ['Sku', 'sku'])}</td>
+                        <td>{entry.product_name || resolveItemField(item, ['ProductName', 'product_name'])}</td>
+                        <td>{entry.quantity || resolveItemField(item, ['Quantity', 'quantity'])}</td>
+                        <td>
+                          <select
+                            value={entry.vendor_name || 'None'}
+                            onChange={(event) => handleAssignmentChange(skuKey, 'vendor_name', event.target.value)}
+                          >
+                            <option value="None">None</option>
+                            {vendorOptions.map((vendor) => (
+                              vendor === 'None' ? null : <option key={vendor} value={vendor}>{vendor}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td>
+                          <input
+                            type="text"
+                            value={entry.unit_price || ''}
+                            disabled={(entry.vendor_name || 'None').toLowerCase() === 'none'}
+                            onChange={(event) => handleAssignmentChange(skuKey, 'unit_price', event.target.value)}
+                          />
+                        </td>
+                        <td>${formatMoney(subtotal)}</td>
+                        <td className="error-text">{errorText}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="supplier-card-list">
+            {supplierLoading ? <p className="status-text">Loading supplier orders...</p> : null}
+
+            {!supplierLoading && supplierOrders.length === 0 ? (
+              <p className="status-text">No supplier orders yet for this CSOID.</p>
+            ) : null}
+
+            {supplierOrders.map((order) => (
+              <SupplierOrderCard
+                  key={getOrderKey(order)}
+                order={order}
+                  financialDraft={supplierFinancialDrafts[getOrderKey(order)] || {
+                    vendor_name: order.vendor_name || 'None',
+                  status: order.status || 'confirmed',
+                  vendor_website_order_date: order.vendor_website_order_date || '',
+                  vendor_website_order_number: order.vendor_website_order_number || '',
+                  tax_total: formatMoney(order.tax_total),
+                  shipping_total: formatMoney(order.shipping_total),
+                  discount_total: formatMoney(order.discount_total),
+                  refund_total: formatMoney(order.refund_total),
+                  comments: order.comments || '',
+                }}
+                onFinancialChange={handleFinancialDraftChange}
+                onItemChange={handleOrderItemChange}
+                vendorOptions={vendorOptions}
+                previewGrandTotal={getGrandTotalPreview(order)}
+              />
+            ))}
+
+            {supplierOrders.length > 0 ? (
+              <div className="button-row final-save-row">
+                <button
+                  type="button"
+                  onClick={prepareSupplierOrdersPayload}
+                  disabled={supplierLoading || savingSupplier}
+                >
+                  {savingSupplier ? 'Saving...' : 'Save Supplier Orders'}
+                </button>
+              </div>
+            ) : null}
+
+            {preparedSupplierPayload ? (
+              <p className="status-text">
+                Prepared {preparedSupplierPayload.supplier_orders.length} supplier orders for final save.
+              </p>
+            ) : null}
+          </section>
         </section>
       </div>
     </AppShell>

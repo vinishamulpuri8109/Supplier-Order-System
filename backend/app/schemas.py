@@ -5,6 +5,7 @@ Used for API data serialization, deserialization, and validation.
 
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -217,3 +218,155 @@ class TokenResponse(BaseModel):
     token_type: str
     email: str
     role: str | None = None
+
+
+class SupplierOrderItemCreate(BaseModel):
+    sku: str = Field(..., min_length=1)
+    product_name: str = Field(..., min_length=1)
+    quantity: int = Field(..., gt=0)
+    vendor_name: str = Field(..., min_length=1)
+    unit_price: Decimal = Field(..., ge=0, max_digits=10, decimal_places=2)
+    status: Literal["confirmed", "backordered", "cancelled", "returned"] = "confirmed"
+    expected_date: date | None = None
+    vendor_note: str | None = None
+    vendor_website_order_date: date | None = None
+    vendor_website_order_number: str | None = None
+
+    @field_validator("sku")
+    def supplier_item_sku_valid(cls, value: str) -> str:
+        cleaned = value.strip().upper()
+        if not cleaned:
+            raise ValueError("SKU is required")
+        return cleaned
+
+    @field_validator("product_name", "vendor_name")
+    def supplier_item_text_fields_valid(cls, value: str, info):
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError(f"{info.field_name} is required")
+        return cleaned
+
+    @field_validator("vendor_website_order_number")
+    def supplier_item_order_number_valid(cls, value: str | None):
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("vendor_note")
+    def vendor_note_valid(cls, value: str | None):
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class SupplierOrderBatchCreateRequest(BaseModel):
+    csoid: int = Field(..., gt=0)
+    cust_order_number: str | None = None
+    items: list[SupplierOrderItemCreate] = Field(..., min_length=1)
+
+    @field_validator("cust_order_number")
+    def cust_order_number_valid(cls, value: str | None):
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class SupplierOrderItemUpdate(BaseModel):
+    id: int = Field(..., gt=0)
+    unit_price: Decimal | None = Field(default=None, ge=0, max_digits=10, decimal_places=2)
+    quantity: int | None = Field(default=None, gt=0)
+    status: Literal["confirmed", "backordered", "cancelled", "returned"] | None = None
+
+
+class SupplierOrderUpdateRequest(BaseModel):
+    tax_total: Decimal | None = Field(default=None, ge=0, max_digits=10, decimal_places=2)
+    shipping_total: Decimal | None = Field(default=None, ge=0, max_digits=10, decimal_places=2)
+    discount_total: Decimal | None = Field(default=None, ge=0, max_digits=10, decimal_places=2)
+    refund_total: Decimal | None = Field(default=None, ge=0, max_digits=10, decimal_places=2)
+    vendor_name: str | None = None
+    vendor_website_order_date: date | None = None
+    vendor_website_order_number: str | None = None
+    comments: str | None = None
+    status: Literal["confirmed", "backordered", "cancelled", "returned"] | None = None
+    items: list[SupplierOrderItemUpdate] = Field(default_factory=list)
+
+    @field_validator("vendor_website_order_number")
+    def vendor_website_order_number_valid(cls, value: str | None):
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("vendor_name")
+    def vendor_name_valid(cls, value: str | None):
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+class SupplierOrderMoveSkuRequest(BaseModel):
+    csoid: int = Field(..., gt=0)
+    sku: str = Field(..., min_length=1)
+    target_vendor_name: str = Field(..., min_length=1)
+
+    @field_validator("sku")
+    def move_sku_normalized(cls, value: str) -> str:
+        cleaned = value.strip().upper()
+        if not cleaned:
+            raise ValueError("sku is required")
+        return cleaned
+
+    @field_validator("target_vendor_name")
+    def target_vendor_valid(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("target_vendor_name is required")
+        return cleaned
+
+
+class SupplierOrderItemResponse(BaseModel):
+    id: int
+    soid: int
+    csoid: int
+    cust_order_number: str | None = None
+    status: str
+    availability_status: str | None = None
+    expected_date: date | None = None
+    vendor_note: str | None = None
+    sku: str
+    product_name: str
+    quantity: int
+    unit_price: float
+    subtotal: float
+
+
+class SupplierOrderResponse(BaseModel):
+    soid: int
+    csoid: int
+    cust_order_number: str | None = None
+    vendor_name: str
+    subtotal: float
+    tax_total: float
+    shipping_total: float
+    discount_total: float
+    refund_total: float
+    grand_total: float
+    vendor_website_order_date: date | None = None
+    vendor_website_order_number: str | None = None
+    comments: str | None = None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    items: list[SupplierOrderItemResponse]
+
+
+class SupplierFollowupAlertResponse(BaseModel):
+    soid: int
+    csoid: int
+    cust_order_number: str | None = None
+    vendor_name: str
+    status: str
+    created_at: datetime

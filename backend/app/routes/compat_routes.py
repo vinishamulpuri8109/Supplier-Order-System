@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
 from app.db.database import get_db
-from app.models.models import SupplierOrder
 from app.schemas import SupplierDashboardCreate
+from app.services.supplier_orders_service import get_next_soid, soid_exists as service_soid_exists
 
 
 router = APIRouter(tags=["dashboard-compat"], dependencies=[Depends(get_current_user)])
@@ -21,22 +21,14 @@ def _as_decimal(value: float) -> Decimal:
 
 
 def _get_next_soid(db: Session) -> str:
-    query = text(
-        """
-        SELECT MAX(TRY_CONVERT(INT, soid))
-        FROM supplier_orders
-        WHERE soid IS NOT NULL
-        """
-    )
-    result = db.execute(query).scalar()
-    base_number = max(result or 0, 9999)
-    return str(base_number + 1)
+    return str(get_next_soid(db))
 
 
 @router.get("/supplier/soid-exists/{soid}")
 def soid_exists(soid: str, db: Session = Depends(get_db)):
-    exists = db.query(SupplierOrder).filter(SupplierOrder.soid == soid).first() is not None
-    return {"exists": exists}
+    if not soid.isdigit():
+        return {"exists": False}
+    return {"exists": service_soid_exists(db, int(soid))}
 
 
 @router.get("/supplier/next-order-number")
@@ -53,6 +45,7 @@ def get_next_order_number(db: Session = Depends(get_db)):
 
 @router.get("/orders")
 def search_orders(
+    orderRef: str = "",
     search: str = "",
     csoid: str = "",
     filterType: str = "",
@@ -66,8 +59,18 @@ def search_orders(
         where_clauses = []
         query_params = {}
 
+        cleaned_order_ref = orderRef.strip()
+        if cleaned_order_ref:
+            where_clauses.append(
+                "(CAST(co.CustOrderNumber AS NVARCHAR(100)) LIKE :order_ref_like"
+                " OR (:order_ref_is_numeric = 1 AND co.CSOID = :order_ref_csoid))"
+            )
+            query_params["order_ref_like"] = f"%{cleaned_order_ref}%"
+            query_params["order_ref_is_numeric"] = 1 if cleaned_order_ref.isdigit() else 0
+            query_params["order_ref_csoid"] = int(cleaned_order_ref) if cleaned_order_ref.isdigit() else -1
+
         cleaned_csoid = csoid.strip()
-        if cleaned_csoid:
+        if cleaned_csoid and not cleaned_order_ref:
             try:
                 query_params["filter_csoid"] = int(cleaned_csoid)
             except ValueError as exc:
@@ -183,10 +186,10 @@ def search_orders(
 
         rows = db.execute(query, query_params).fetchall()
 
-        if cleaned_csoid and not rows:
+        if (cleaned_csoid or cleaned_order_ref) and not rows:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="The searched CSOID does not exist",
+                detail="No orders found for the provided CSOID/PO",
             )
 
         return [
@@ -258,176 +261,10 @@ def get_order_items(csoid: int, db: Session = Depends(get_db)):
             detail=f"Failed to fetch order items: {str(exc)}",
         )
 
-
 @router.post("/supplier", status_code=status.HTTP_201_CREATED)
 def create_supplier_entry(entry: SupplierDashboardCreate, db: Session = Depends(get_db)):
-    """Accept frontend supplier payload and persist supplier order."""
-    try:
-        resolved_csoid = entry.csoid
-        if resolved_csoid is None and entry.po:
-            lookup = text(
-                """
-                SELECT TOP 1 co.CSOID
-                FROM CustomerOrders co
-                WHERE co.CustOrderNumber = :order_number
-                ORDER BY co.CSOID DESC
-                """
-            )
-            resolved_row = db.execute(
-                lookup, {"order_number": entry.po.strip()}
-            ).fetchone()
-            if resolved_row:
-                resolved_csoid = int(resolved_row[0])
-
-        if resolved_csoid is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Unable to resolve CSOID from payload",
-            )
-
-        csoid_exists = db.execute(
-            text("SELECT TOP 1 1 FROM CustomerOrders WHERE CSOID = :csoid"),
-            {"csoid": resolved_csoid},
-        ).fetchone()
-        if not csoid_exists:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="CSOID does not exist in CustomerOrders",
-            )
-
-        supplier_name = entry.vendorName.strip()
-        normalized_sku = entry.sku.strip().upper()
-
-        vendor_order_date = None
-        if entry.vendorOrderDate:
-            try:
-                vendor_order_date = datetime.strptime(entry.vendorOrderDate, "%Y-%m-%d").date()
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="vendorOrderDate must be in YYYY-MM-DD format",
-                ) from exc
-
-        if vendor_order_date and vendor_order_date > datetime.utcnow().date():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="vendorOrderDate cannot be in the future",
-            )
-
-        if not entry.website:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Website is required",
-            )
-
-        if not entry.vendorOrderNumber or not entry.vendorOrderNumber.strip():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Vendor order number is required",
-            )
-
-        if entry.unitPrice <= 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Unit price must be greater than 0",
-            )
-
-        if entry.quantity <= 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Quantity must be greater than 0",
-            )
-
-        calculated_subtotal = (_as_decimal(entry.unitPrice) * Decimal(entry.quantity)).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP
-        )
-        if _as_decimal(entry.subtotal) != calculated_subtotal:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Subtotal must equal unit price * quantity",
-            )
-
-        if entry.discount < 0 or entry.discount > calculated_subtotal:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Discount must be >= 0 and <= subtotal",
-            )
-
-        if entry.tax < 0 or entry.shipping < 0 or entry.refund < 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Tax, shipping, and refund must be >= 0",
-            )
-
-        calculated_grand_total = (
-            calculated_subtotal
-            + _as_decimal(entry.tax)
-            + _as_decimal(entry.shipping)
-            - _as_decimal(entry.discount)
-        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        if _as_decimal(entry.grandTotal) != calculated_grand_total:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Grand total must equal subtotal + tax + shipping - discount",
-            )
-
-        generated_soid = _get_next_soid(db)
-
-        new_order = SupplierOrder(
-            csoid=resolved_csoid,
-            sku=normalized_sku,
-            po=(entry.po or '').strip() or None,
-            quantity=entry.quantity,
-            supplier_name=supplier_name,
-            vendor_order_date=vendor_order_date,
-            soid=generated_soid,
-            vendor_order_number=(entry.vendorOrderNumber or "").strip() or None,
-            vendor_name=supplier_name,
-            unit_price=entry.unitPrice,
-            subtotal=calculated_subtotal,
-            tax=entry.tax,
-            shipping=entry.shipping,
-            discount=entry.discount,
-            grand_total=calculated_grand_total,
-            refund=entry.refund,
-            comments=(entry.comments or "").strip() or None,
-            website=(entry.website or "").strip() or None,
-            status="pending",
-        )
-        db.add(new_order)
-        db.commit()
-        db.refresh(new_order)
-
-        return {
-            "message": "Supplier data saved successfully",
-            "supplierOrder": {
-                "soid": new_order.soid,
-                "csoid": new_order.csoid,
-                "po": new_order.po,
-                "sku": new_order.sku,
-                "quantity": new_order.quantity,
-                "supplier_name": new_order.supplier_name,
-                "vendor_order_date": new_order.vendor_order_date,
-                "vendor_order_number": new_order.vendor_order_number,
-                "vendor_name": new_order.vendor_name,
-                "unit_price": new_order.unit_price,
-                "subtotal": new_order.subtotal,
-                "tax": new_order.tax,
-                "shipping": new_order.shipping,
-                "discount": new_order.discount,
-                "grand_total": new_order.grand_total,
-                "refund": new_order.refund,
-                "comments": new_order.comments,
-                "website": new_order.website,
-                "status": new_order.status,
-                "created_at": new_order.created_at,
-            },
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save supplier data: {str(exc)}",
-        )
+    """Deprecated compatibility endpoint retained to avoid silent failures."""
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Endpoint deprecated. Use POST /supplier/orders for grouped supplier order creation.",
+    )
