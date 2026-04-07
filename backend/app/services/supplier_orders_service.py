@@ -168,9 +168,24 @@ def serialize_order(order: SupplierOrder) -> dict:
 
 
 def get_next_soid(db: Session) -> int:
-    latest_soid = db.query(SupplierOrder.soid).order_by(SupplierOrder.soid.desc()).first()
-    base = latest_soid[0] if latest_soid else 9999
-    return max(base, 9999) + 1
+    base_soid = 10000
+    existing_soids = (
+        db.query(SupplierOrder.soid)
+        .filter(SupplierOrder.soid >= base_soid)
+        .order_by(SupplierOrder.soid.asc())
+        .all()
+    )
+
+    candidate = base_soid
+    for row in existing_soids:
+        current_soid = int(row[0])
+        if current_soid == candidate:
+            candidate += 1
+            continue
+        if current_soid > candidate:
+            break
+
+    return candidate
 
 
 def soid_exists(db: Session, soid: int) -> bool:
@@ -242,6 +257,7 @@ def create_supplier_orders(
         order_status = "backordered" if vendor_name == "None" else "confirmed"
 
         order = SupplierOrder(
+            soid=get_next_soid(db),
             csoid=csoid,
             cust_order_number=normalized_cust_order_number,
             vendor_name=vendor_name,

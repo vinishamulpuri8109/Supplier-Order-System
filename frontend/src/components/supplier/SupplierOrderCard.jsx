@@ -9,6 +9,10 @@ export default function SupplierOrderCard({
   financialDraft,
   onFinancialChange,
   onItemChange,
+  isEditing = false,
+  onToggleEdit = () => {},
+  onSave = () => {},
+  isSaving = false,
   vendorOptions = [],
   previewGrandTotal,
 }) {
@@ -28,6 +32,8 @@ export default function SupplierOrderCard({
   const soidSubtotal = useMemo(() => {
     return roundToTwo(skuSubtotals.reduce((acc, val) => acc + val, 0));
   }, [skuSubtotals]);
+  const isReadOnly = !isEditing;
+  const vendorDetailsLocked = isReadOnly || currentStatus === 'backordered';
 
   return (
     <article className={`supplier-order-card ${currentStatus}-card`}>
@@ -36,11 +42,24 @@ export default function SupplierOrderCard({
           <p className="order-id-label">SOID</p>
           <h3>#{normalizedOrder.soid}</h3>
         </div>
-        <div>
+        <div className="order-head-actions">
+          <div className="order-action-row">
+            <button type="button" className="ghost" onClick={onToggleEdit}>
+              {isEditing ? 'Done' : 'Edit'}
+            </button>
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={!isEditing || isSaving || !normalizedOrder.soid}
+            >
+              {isSaving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
           <label className="inline-status-editor">
             Vendor
             <select
               value={financialDraft.vendor_name || normalizedOrder.vendor_name || 'None'}
+              disabled={vendorDetailsLocked}
               onChange={(event) => onFinancialChange(orderKey, 'vendor_name', event.target.value)}
             >
               <option value="None">None</option>
@@ -53,6 +72,7 @@ export default function SupplierOrderCard({
             Status
             <select
               value={currentStatus}
+              disabled={isReadOnly}
               onChange={(event) => onFinancialChange(orderKey, 'status', event.target.value)}
             >
               {ORDER_STATUSES.map((status) => (
@@ -76,6 +96,7 @@ export default function SupplierOrderCard({
                 type="number"
                 min="1"
                 value={item.quantity}
+                disabled={isReadOnly}
                 onChange={(event) => onItemChange(orderKey, item.id, 'quantity', event.target.value)}
               />
             </label>
@@ -84,7 +105,7 @@ export default function SupplierOrderCard({
               <input
                 type="text"
                 value={item.unit_price}
-                disabled={currentStatus !== 'confirmed'}
+                disabled={isReadOnly || currentStatus !== 'confirmed'}
                 onChange={(event) => onItemChange(orderKey, item.id, 'unit_price', event.target.value)}
               />
             </label>
@@ -106,6 +127,7 @@ export default function SupplierOrderCard({
           <input
             type="date"
             value={financialDraft.vendor_website_order_date}
+            disabled={vendorDetailsLocked}
             onChange={(event) => onFinancialChange(orderKey, 'vendor_website_order_date', event.target.value)}
           />
         </label>
@@ -114,6 +136,7 @@ export default function SupplierOrderCard({
           <input
             type="text"
             value={financialDraft.vendor_website_order_number}
+            disabled={vendorDetailsLocked}
             onChange={(event) => onFinancialChange(orderKey, 'vendor_website_order_number', event.target.value)}
           />
         </label>
@@ -125,6 +148,7 @@ export default function SupplierOrderCard({
           <input
             type="text"
             value={financialDraft.tax_total}
+            disabled={isReadOnly}
             onChange={(event) => onFinancialChange(orderKey, 'tax_total', event.target.value)}
           />
         </label>
@@ -133,6 +157,7 @@ export default function SupplierOrderCard({
           <input
             type="text"
             value={financialDraft.shipping_total}
+            disabled={isReadOnly}
             onChange={(event) => onFinancialChange(orderKey, 'shipping_total', event.target.value)}
           />
         </label>
@@ -141,6 +166,7 @@ export default function SupplierOrderCard({
           <input
             type="text"
             value={financialDraft.discount_total}
+            disabled={isReadOnly}
             onChange={(event) => onFinancialChange(orderKey, 'discount_total', event.target.value)}
           />
         </label>
@@ -149,6 +175,7 @@ export default function SupplierOrderCard({
           <input
             type="text"
             value={financialDraft.refund_total}
+            disabled={isReadOnly}
             onChange={(event) => onFinancialChange(orderKey, 'refund_total', event.target.value)}
           />
         </label>
@@ -159,6 +186,7 @@ export default function SupplierOrderCard({
         <textarea
           rows={2}
           value={financialDraft.comments}
+          disabled={isReadOnly}
           onChange={(event) => onFinancialChange(orderKey, 'comments', event.target.value)}
         />
       </label>

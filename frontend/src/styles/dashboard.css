@@ -298,6 +298,17 @@ button:disabled {
   margin-bottom: 0.5rem;
 }
 
+.order-head-actions {
+  display: grid;
+  justify-items: end;
+  gap: 0.2rem;
+}
+
+.order-action-row {
+  display: flex;
+  gap: 0.35rem;
+}
+
 .order-id-label {
   margin: 0;
   text-transform: uppercase;

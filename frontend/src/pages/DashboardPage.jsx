@@ -151,7 +151,8 @@ export default function DashboardPage({ userEmail, onLogout }) {
   const [assignmentErrors, setAssignmentErrors] = useState({});
   const [supplierOrders, setSupplierOrders] = useState([]);
   const [supplierFinancialDrafts, setSupplierFinancialDrafts] = useState({});
-  const [preparedSupplierPayload, setPreparedSupplierPayload] = useState(null);
+  const [editingOrderKeys, setEditingOrderKeys] = useState({});
+  const [savingOrderKeys, setSavingOrderKeys] = useState({});
   const vendorOptions = useMemo(() => {
     const fromWebsite = WEBSITE_VENDOR_MAP[selectedWebsite] || [];
     const fromAssignments = Object.values(skuAssignments)
@@ -190,6 +191,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
     try {
       const data = await fetchSupplierOrders(csoid);
       setSupplierOrders(data);
+      setEditingOrderKeys({});
       setSupplierFinancialDrafts((prev) => {
         const next = {};
         for (const order of data) {
@@ -225,7 +227,6 @@ export default function DashboardPage({ userEmail, onLogout }) {
       setSkuAssignments({});
       setSupplierOrders([]);
       setSupplierFinancialDrafts({});
-      setPreparedSupplierPayload(null);
       return;
     }
 
@@ -233,7 +234,6 @@ export default function DashboardPage({ userEmail, onLogout }) {
     setItemsError('');
     setSupplierError('');
     setSuccessMessage('');
-    setPreparedSupplierPayload(null);
 
     try {
       const fetchedItems = await fetchOrderItems(csoid);
@@ -274,7 +274,6 @@ export default function DashboardPage({ userEmail, onLogout }) {
       setItems([]);
       setSupplierOrders([]);
       setSupplierFinancialDrafts({});
-      setPreparedSupplierPayload(null);
 
       if (results.length > 0) {
         setSelectedOrder(results[0]);
@@ -291,7 +290,6 @@ export default function DashboardPage({ userEmail, onLogout }) {
       setSkuAssignments({});
       setSupplierOrders([]);
       setSupplierFinancialDrafts({});
-      setPreparedSupplierPayload(null);
     } finally {
       setOrdersLoading(false);
     }
@@ -430,7 +428,6 @@ export default function DashboardPage({ userEmail, onLogout }) {
         )
       );
       setSuccessMessage('Supplier orders created. Review the saved SOIDs and fill in the fields below.');
-      setPreparedSupplierPayload(null);
     } catch (error) {
       setSupplierError(error.message || 'Unable to generate supplier orders');
     } finally {
@@ -439,7 +436,6 @@ export default function DashboardPage({ userEmail, onLogout }) {
   };
 
   const handleFinancialDraftChange = (soid, field, value) => {
-    setPreparedSupplierPayload(null);
     if (field === 'status' || field === 'vendor_name') {
       const normalized = String(value || 'confirmed').toLowerCase();
       setSupplierOrders((prev) => prev.map((order) => {
@@ -452,7 +448,18 @@ export default function DashboardPage({ userEmail, onLogout }) {
         return {
           ...order,
           status: nextStatus,
-          vendor_name: field === 'vendor_name' ? (value || 'None') : order.vendor_name,
+          vendor_name:
+            field === 'status' && normalized === 'backordered'
+              ? 'None'
+              : (field === 'vendor_name' ? (value || 'None') : order.vendor_name),
+          vendor_website_order_date:
+            field === 'status' && normalized === 'backordered'
+              ? null
+              : order.vendor_website_order_date,
+          vendor_website_order_number:
+            field === 'status' && normalized === 'backordered'
+              ? ''
+              : order.vendor_website_order_number,
         };
       }));
     }
@@ -472,6 +479,9 @@ export default function DashboardPage({ userEmail, onLogout }) {
 
       if (field === 'comments' || field === 'vendor_website_order_date' || field === 'vendor_website_order_number' || field === 'status' || field === 'vendor_name') {
         const nextValue = field === 'vendor_name' ? (value || 'None') : value;
+        const normalizedStatus = field === 'status'
+          ? String(nextValue || 'confirmed').toLowerCase()
+          : String(current.status || 'confirmed').toLowerCase();
         return {
           ...prev,
           [orderKey]: {
@@ -479,6 +489,13 @@ export default function DashboardPage({ userEmail, onLogout }) {
             [field]: nextValue,
             ...(field === 'vendor_name' && String(nextValue).toLowerCase() === 'none' ? { status: 'backordered' } : {}),
             ...(field === 'vendor_name' && String(nextValue).toLowerCase() !== 'none' && current.status === 'backordered' ? { status: 'confirmed' } : {}),
+            ...(field === 'status' && normalizedStatus === 'backordered'
+              ? {
+                  vendor_name: 'None',
+                  vendor_website_order_date: '',
+                  vendor_website_order_number: '',
+                }
+              : {}),
           },
         };
       }
@@ -494,7 +511,6 @@ export default function DashboardPage({ userEmail, onLogout }) {
   };
 
   const handleOrderItemChange = (soid, itemId, field, value) => {
-    setPreparedSupplierPayload(null);
     setSupplierOrders((prev) => prev.map((order) => {
       if (getOrderKey(order) !== String(soid)) {
         return order;
@@ -536,6 +552,127 @@ export default function DashboardPage({ userEmail, onLogout }) {
     const discount = roundToTwo(draft.discount_total || 0);
     const refund = roundToTwo(draft.refund_total || 0);
     return roundToTwo(subtotal + tax + shipping - discount - refund);
+  };
+
+  const handleToggleOrderEdit = (orderKey) => {
+    setEditingOrderKeys((prev) => ({
+      ...prev,
+      [orderKey]: !prev[orderKey],
+    }));
+  };
+
+  const validateSingleSupplierOrder = (order) => {
+    const draft = supplierFinancialDrafts[getOrderKey(order)] || {};
+    const normalizedVendor = String(draft.vendor_name || order.vendor_name || '').trim() || 'None';
+    const normalizedStatus = String(draft.status || order.status || 'confirmed').toLowerCase();
+
+    if (normalizedStatus === 'confirmed' && normalizedVendor.toLowerCase() === 'none') {
+      return `SOID ${order.soid}: vendor is required when status is confirmed`;
+    }
+    if (normalizedStatus === 'backordered' && normalizedVendor.toLowerCase() !== 'none') {
+      return `SOID ${order.soid}: vendor must be None when status is backordered`;
+    }
+
+    const moneyFields = ['tax_total', 'shipping_total', 'discount_total', 'refund_total'];
+    for (const field of moneyFields) {
+      const raw = String(draft[field] ?? '0.00');
+      if (!MONEY_INPUT_REGEX.test(raw)) {
+        return `SOID ${order.soid}: ${field} must have at most 2 decimals`;
+      }
+      if (Number(raw || 0) < 0) {
+        return `SOID ${order.soid}: ${field} must be >= 0`;
+      }
+    }
+
+    if (Number(draft.discount_total || 0) > Number(order.subtotal || 0)) {
+      return `SOID ${order.soid}: discount cannot exceed subtotal`;
+    }
+
+    return '';
+  };
+
+  const buildOrderPayload = (order) => {
+    const draft = supplierFinancialDrafts[order.soid] || {};
+    const normalizedVendor = String(draft.vendor_name || order.vendor_name || 'None').trim() || 'None';
+    const normalizedStatus = String(draft.status || order.status || 'confirmed').toLowerCase();
+    return {
+      soid: order.soid,
+      csoid: order.csoid,
+      cust_order_number: String(selectedOrder?.CustOrderNumber ?? selectedOrder?.cust_order_number ?? '').trim() || null,
+      vendor_name: normalizedVendor,
+      status: normalizedStatus,
+      vendor_website_order_date: draft.vendor_website_order_date || null,
+      vendor_website_order_number: (draft.vendor_website_order_number || '').trim(),
+      comments: (draft.comments || '').trim(),
+      subtotal: roundToTwo(order.subtotal || 0),
+      tax_total: roundToTwo(draft.tax_total || 0),
+      shipping_total: roundToTwo(draft.shipping_total || 0),
+      discount_total: roundToTwo(draft.discount_total || 0),
+      refund_total: roundToTwo(draft.refund_total || 0),
+      grand_total: getGrandTotalPreview(order),
+      items: (order.items || []).map((item) => ({
+        id: item.id,
+        soid: item.soid,
+        csoid: item.csoid,
+        sku: item.sku,
+        status: normalizedStatus,
+        product_name: item.product_name,
+        quantity: item.quantity,
+        unit_price: roundToTwo(item.unit_price || 0),
+        subtotal: roundToTwo(item.subtotal || 0),
+      })),
+    };
+  };
+
+  const buildUpdatePayload = (orderPayload) => ({
+    tax_total: roundToTwo(orderPayload.tax_total || 0),
+    shipping_total: roundToTwo(orderPayload.shipping_total || 0),
+    discount_total: roundToTwo(orderPayload.discount_total || 0),
+    refund_total: roundToTwo(orderPayload.refund_total || 0),
+    comments: (orderPayload.comments || '').trim(),
+    status: (orderPayload.status || 'confirmed').toLowerCase(),
+    vendor_name: String(orderPayload.vendor_name || 'None').trim() || 'None',
+    items: (orderPayload.items || []).map((item) => ({
+      id: item.id,
+      quantity: Number(item.quantity || 0),
+      unit_price: roundToTwo(item.unit_price || 0),
+      status: (item.status || 'confirmed').toLowerCase(),
+    })),
+    vendor_website_order_date: orderPayload.vendor_website_order_date || null,
+    vendor_website_order_number: (orderPayload.vendor_website_order_number || '').trim(),
+  });
+
+  const handleSaveSingleOrder = async (order) => {
+    const orderKey = getOrderKey(order);
+    if (!order?.soid) {
+      setSupplierError('Cannot save this order because SOID is missing. Regenerate supplier orders.');
+      return;
+    }
+
+    const validationError = validateSingleSupplierOrder(order);
+    if (validationError) {
+      setSupplierError(validationError);
+      return;
+    }
+
+    setSupplierError('');
+    setSuccessMessage('');
+    setSavingOrderKeys((prev) => ({ ...prev, [orderKey]: true }));
+
+    try {
+      const orderPayload = buildOrderPayload(order);
+      await updateSupplierOrder(order.soid, buildUpdatePayload(orderPayload));
+      await loadSupplierOrders(Number(selectedOrder?.CSOID ?? selectedOrder?.csoid ?? 0));
+      setSuccessMessage(`SOID ${order.soid} saved successfully.`);
+    } catch (error) {
+      setSupplierError(error.message || `Unable to save SOID ${order.soid}`);
+    } finally {
+      setSavingOrderKeys((prev) => {
+        const next = { ...prev };
+        delete next[orderKey];
+        return next;
+      });
+    }
   };
 
   const prepareSupplierOrdersPayload = async () => {
@@ -618,28 +755,10 @@ export default function DashboardPage({ userEmail, onLogout }) {
     };
 
     setSupplierError('');
-    setPreparedSupplierPayload(payload);
 
     setSavingSupplier(true);
     try {
       const csoidValue = Number(selectedOrder?.CSOID ?? selectedOrder?.csoid ?? 0);
-      const buildUpdatePayload = (orderPayload) => ({
-        tax_total: roundToTwo(orderPayload.tax_total || 0),
-        shipping_total: roundToTwo(orderPayload.shipping_total || 0),
-        discount_total: roundToTwo(orderPayload.discount_total || 0),
-        refund_total: roundToTwo(orderPayload.refund_total || 0),
-        comments: (orderPayload.comments || '').trim(),
-        status: (orderPayload.status || 'confirmed').toLowerCase(),
-        vendor_name: String(orderPayload.vendor_name || 'None').trim() || 'None',
-        items: (orderPayload.items || []).map((item) => ({
-          id: item.id,
-          quantity: Number(item.quantity || 0),
-          unit_price: roundToTwo(item.unit_price || 0),
-          status: (item.status || 'confirmed').toLowerCase(),
-        })),
-        vendor_website_order_date: orderPayload.vendor_website_order_date || null,
-        vendor_website_order_number: (orderPayload.vendor_website_order_number || '').trim(),
-      });
 
       for (const orderPayload of payload.supplier_orders) {
         if (!orderPayload.soid) {
@@ -791,45 +910,36 @@ export default function DashboardPage({ userEmail, onLogout }) {
               <p className="status-text">No supplier orders yet for this CSOID.</p>
             ) : null}
 
-            {supplierOrders.map((order) => (
-              <SupplierOrderCard
-                  key={getOrderKey(order)}
-                order={order}
-                  financialDraft={supplierFinancialDrafts[getOrderKey(order)] || {
+            {supplierOrders.map((order) => {
+              const orderKey = getOrderKey(order);
+              return (
+                <SupplierOrderCard
+                  key={orderKey}
+                  order={order}
+                  financialDraft={supplierFinancialDrafts[orderKey] || {
                     vendor_name: order.vendor_name || 'None',
-                  status: order.status || 'confirmed',
-                  vendor_website_order_date: order.vendor_website_order_date || '',
-                  vendor_website_order_number: order.vendor_website_order_number || '',
-                  tax_total: formatMoney(order.tax_total),
-                  shipping_total: formatMoney(order.shipping_total),
-                  discount_total: formatMoney(order.discount_total),
-                  refund_total: formatMoney(order.refund_total),
-                  comments: order.comments || '',
-                }}
-                onFinancialChange={handleFinancialDraftChange}
-                onItemChange={handleOrderItemChange}
-                vendorOptions={vendorOptions}
-                previewGrandTotal={getGrandTotalPreview(order)}
-              />
-            ))}
+                    status: order.status || 'confirmed',
+                    vendor_website_order_date: order.vendor_website_order_date || '',
+                    vendor_website_order_number: order.vendor_website_order_number || '',
+                    tax_total: formatMoney(order.tax_total),
+                    shipping_total: formatMoney(order.shipping_total),
+                    discount_total: formatMoney(order.discount_total),
+                    refund_total: formatMoney(order.refund_total),
+                    comments: order.comments || '',
+                  }}
+                  onFinancialChange={handleFinancialDraftChange}
+                  onItemChange={handleOrderItemChange}
+                  isEditing={Boolean(editingOrderKeys[orderKey])}
+                  onToggleEdit={() => handleToggleOrderEdit(orderKey)}
+                  onSave={() => handleSaveSingleOrder(order)}
+                  isSaving={Boolean(savingOrderKeys[orderKey])}
+                  vendorOptions={vendorOptions}
+                  previewGrandTotal={getGrandTotalPreview(order)}
+                />
+              );
+            })}
 
-            {supplierOrders.length > 0 ? (
-              <div className="button-row final-save-row">
-                <button
-                  type="button"
-                  onClick={prepareSupplierOrdersPayload}
-                  disabled={supplierLoading || savingSupplier}
-                >
-                  {savingSupplier ? 'Saving...' : 'Save Supplier Orders'}
-                </button>
-              </div>
-            ) : null}
 
-            {preparedSupplierPayload ? (
-              <p className="status-text">
-                Prepared {preparedSupplierPayload.supplier_orders.length} supplier orders for final save.
-              </p>
-            ) : null}
           </section>
         </section>
       </div>
