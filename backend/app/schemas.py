@@ -344,6 +344,25 @@ class SupplierOrderMoveSkuRequest(BaseModel):
         return cleaned
 
 
+class SupplierOrderBulkDeleteByPoRequest(BaseModel):
+    csoid: int = Field(..., gt=0)
+    cust_order_number: str = Field(..., min_length=1)
+
+    @field_validator("cust_order_number")
+    def bulk_delete_po_valid(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("cust_order_number is required")
+        return cleaned
+
+
+class SupplierOrderBulkDeleteByPoResponse(BaseModel):
+    csoid: int
+    cust_order_number: str
+    deleted_soid_count: int
+    deleted_item_count: int
+
+
 class SupplierOrderItemResponse(BaseModel):
     id: int
     soid: int

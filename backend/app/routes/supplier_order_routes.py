@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_user
 from app.db.database import get_db
 from app.schemas import (
+    SupplierOrderBulkDeleteByPoRequest,
+    SupplierOrderBulkDeleteByPoResponse,
     SupplierOrderBatchCreateRequest,
     SupplierFollowupAlertResponse,
     SupplierOrderMoveSkuRequest,
@@ -15,6 +17,7 @@ from app.schemas import (
 from app.services.supplier_orders_service import (
     create_supplier_orders,
     delete_supplier_order,
+    delete_supplier_orders_by_po,
     get_all_backordered_orders,
     get_supplier_followup_alerts,
     get_next_soid,
@@ -68,6 +71,15 @@ def list_followup_alerts(db: Session = Depends(get_db)):
 def delete_order(soid: int, db: Session = Depends(get_db)):
     delete_supplier_order(db, soid)
     return {"message": "Supplier order deleted successfully", "soid": soid}
+
+
+@router.post("/delete-by-po", response_model=SupplierOrderBulkDeleteByPoResponse, status_code=status.HTTP_200_OK)
+def delete_orders_by_po(payload: SupplierOrderBulkDeleteByPoRequest, db: Session = Depends(get_db)):
+    return delete_supplier_orders_by_po(
+        db=db,
+        csoid=payload.csoid,
+        cust_order_number=payload.cust_order_number,
+    )
 
 
 @router.post("/move-sku", status_code=status.HTTP_200_OK)

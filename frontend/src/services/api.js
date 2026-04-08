@@ -207,3 +207,13 @@ export async function moveSupplierOrderSku(payload) {
     body: JSON.stringify(payload),
   });
 }
+
+export async function deleteSupplierOrdersByPo(payload) {
+  return fetchWithFallback(['/supplier/orders/delete-by-po'], {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+}

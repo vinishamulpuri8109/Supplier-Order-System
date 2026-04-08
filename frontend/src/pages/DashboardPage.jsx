@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { WEBSITE_OPTIONS, WEBSITE_VENDOR_MAP } from '../constants/supplierOptions';
 import {
   createSupplierOrders,
+  deleteSupplierOrdersByPo,
   fetchAllBackorderedOrders,
   fetchOrderItems,
   fetchSupplierOrders,
@@ -137,6 +138,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
   const [itemsLoading, setItemsLoading] = useState(false);
   const [supplierLoading, setSupplierLoading] = useState(false);
   const [savingSupplier, setSavingSupplier] = useState(false);
+  const [deletingByPo, setDeletingByPo] = useState(false);
 
   const [ordersError, setOrdersError] = useState('');
   const [itemsError, setItemsError] = useState('');
@@ -502,6 +504,51 @@ export default function DashboardPage({ userEmail, onLogout }) {
       setSupplierError(error.message || 'Unable to generate supplier orders');
     } finally {
       setSavingSupplier(false);
+    }
+  };
+
+  const handleDeleteAssignmentsForPo = async () => {
+    const csoid = Number(selectedOrder?.CSOID ?? selectedOrder?.csoid ?? 0);
+    const custOrderNumber = String(selectedOrder?.CustOrderNumber ?? selectedOrder?.cust_order_number ?? '').trim();
+
+    if (!csoid || !custOrderNumber) {
+      setSupplierError('Select an order with a PO first.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete all supplier assignments for PO #${custOrderNumber}? This will remove all generated SOIDs for this PO.`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingByPo(true);
+    setSupplierError('');
+    setSuccessMessage('');
+
+    try {
+      const result = await deleteSupplierOrdersByPo({
+        csoid,
+        cust_order_number: custOrderNumber,
+      });
+
+      await loadSupplierOrders(csoid, supplierStatusFilter);
+      await refreshGlobalBackorderedCount();
+      setOrderMessages({});
+      setEditingOrderKeys({});
+
+      if (Number(result?.deleted_soid_count || 0) === 0) {
+        setSuccessMessage(`No supplier assignments found for PO #${custOrderNumber}.`);
+      } else {
+        setSuccessMessage(
+          `Deleted ${result.deleted_soid_count} SOID(s) and ${result.deleted_item_count} item(s) for PO #${custOrderNumber}.`
+        );
+      }
+    } catch (error) {
+      setSupplierError(error.message || 'Unable to delete supplier assignments for this PO');
+    } finally {
+      setDeletingByPo(false);
     }
   };
 
@@ -1000,9 +1047,18 @@ export default function DashboardPage({ userEmail, onLogout }) {
               <button
                 type="button"
                 onClick={generateSupplierOrders}
-                disabled={savingSupplier || items.length === 0}
+                disabled={savingSupplier || deletingByPo || items.length === 0}
               >
                 {savingSupplier ? 'Generating...' : 'Generate Supplier Orders'}
+              </button>
+
+              <button
+                type="button"
+                className="ghost"
+                onClick={handleDeleteAssignmentsForPo}
+                disabled={deletingByPo || savingSupplier || !selectedOrder || supplierOrders.length === 0}
+              >
+                {deletingByPo ? 'Deleting...' : 'Delete All Assigning For This PO'}
               </button>
             </div>
 

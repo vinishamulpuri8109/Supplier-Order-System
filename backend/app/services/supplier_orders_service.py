@@ -420,6 +420,59 @@ def delete_supplier_order(db: Session, soid: int) -> None:
     db.commit()
 
 
+def delete_supplier_orders_by_po(db: Session, csoid: int, cust_order_number: str) -> dict:
+    normalized_po = (cust_order_number or "").strip()
+    if not normalized_po:
+        raise HTTPException(status_code=400, detail="cust_order_number is required")
+
+    orders = (
+        db.query(SupplierOrder)
+        .filter(
+            SupplierOrder.csoid == csoid,
+            SupplierOrder.cust_order_number == normalized_po,
+        )
+        .order_by(SupplierOrder.soid.asc())
+        .all()
+    )
+
+    if not orders:
+        return {
+            "csoid": csoid,
+            "cust_order_number": normalized_po,
+            "deleted_soid_count": 0,
+            "deleted_item_count": 0,
+        }
+
+    finalized_statuses = {"confirmed", "cancelled", "returned"}
+    blocked = [
+        order.soid
+        for order in orders
+        if str(order.status or "").strip().lower() in finalized_statuses
+    ]
+    if blocked:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Cannot delete assignments for this PO because one or more SOIDs are finalized "
+                "(confirmed/cancelled/returned)."
+            ),
+        )
+
+    deleted_item_count = sum(len(order.items or []) for order in orders)
+    deleted_soid_count = len(orders)
+
+    for order in orders:
+        db.delete(order)
+    db.commit()
+
+    return {
+        "csoid": csoid,
+        "cust_order_number": normalized_po,
+        "deleted_soid_count": deleted_soid_count,
+        "deleted_item_count": deleted_item_count,
+    }
+
+
 def move_sku_between_vendors(db: Session, csoid: int, sku: str, target_vendor_name: str) -> dict:
     normalized_sku = _normalize_sku(sku)
     normalized_vendor = _normalize_vendor(target_vendor_name)
