@@ -1,6 +1,6 @@
 """Supplier order CRUD APIs."""
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
@@ -15,6 +15,7 @@ from app.schemas import (
 from app.services.supplier_orders_service import (
     create_supplier_orders,
     delete_supplier_order,
+    get_all_backordered_orders,
     get_supplier_followup_alerts,
     get_next_soid,
     get_supplier_orders_by_csoid,
@@ -91,7 +92,14 @@ def soid_exists_endpoint(soid: int, db: Session = Depends(get_db)):
     return {"exists": service_soid_exists(db, soid)}
 
 
+@router.get("/status/backordered", response_model=list[SupplierOrderResponse])
+def list_all_backordered_orders(db: Session = Depends(get_db)):
+    """Get all backordered supplier orders across all CSIDs."""
+    orders = get_all_backordered_orders(db)
+    return [serialize_order(order) for order in orders]
+
+
 @router.get("/{csoid}", response_model=list[SupplierOrderResponse])
-def list_orders(csoid: int, db: Session = Depends(get_db)):
-    orders = get_supplier_orders_by_csoid(db, csoid)
+def list_orders(csoid: int, status_filter: str | None = Query(default=None, alias="status"), db: Session = Depends(get_db)):
+    orders = get_supplier_orders_by_csoid(db, csoid, status_filter=status_filter)
     return [serialize_order(order) for order in orders]

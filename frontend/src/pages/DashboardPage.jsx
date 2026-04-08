@@ -2,10 +2,12 @@ import AppShell from '../components/layout/AppShell';
 import OrderSearchCard from '../components/orders/OrderSearchCard';
 import OrderItemsTable from '../components/orders/OrderItemsTable';
 import SupplierOrderCard from '../components/supplier/SupplierOrderCard';
-import { useMemo, useState } from 'react';
+import BackorderWidget from '../components/supplier/BackorderWidget';
+import { useEffect, useMemo, useState } from 'react';
 import { WEBSITE_OPTIONS, WEBSITE_VENDOR_MAP } from '../constants/supplierOptions';
 import {
   createSupplierOrders,
+  fetchAllBackorderedOrders,
   fetchOrderItems,
   fetchSupplierOrders,
   searchOrders,
@@ -60,29 +62,22 @@ function resolveItemField(item, candidates) {
   return '';
 }
 
-function deriveOrderStatusFromItems(items) {
-  const statuses = new Set((items || []).map((item) => String(item.status || item.availability_status || 'confirmed').toLowerCase()));
-  if (statuses.has('backordered')) return 'backordered';
-  if (statuses.has('cancelled')) return 'cancelled';
-  if (statuses.has('returned')) return 'returned';
-  return 'confirmed';
-}
-
 function buildLocalSupplierOrders(csoid, assignments) {
   const grouped = {};
 
   for (const assignment of Object.values(assignments)) {
     const vendor = String(assignment.vendor_name || 'None').trim() || 'None';
     const itemStatus = vendor === 'None' ? 'backordered' : 'confirmed';
-    if (!grouped[vendor]) {
-      grouped[vendor] = [];
+    const groupKey = vendor === 'None' ? `backordered-${assignment.sku}` : vendor;
+    if (!grouped[groupKey]) {
+      grouped[groupKey] = [];
     }
 
     const quantity = Number(assignment.quantity || 0);
     const unitPrice = vendor === 'None' ? 0 : roundToTwo(assignment.unit_price || 0);
     const subtotal = roundToTwo(quantity * unitPrice);
 
-    grouped[vendor].push({
+    grouped[groupKey].push({
       id: `${vendor}-${assignment.sku}`,
       soid: 0,
       csoid,
@@ -104,11 +99,12 @@ function buildLocalSupplierOrders(csoid, assignments) {
     const subtotal = roundToTwo(items.reduce((acc, item) => acc + Number(item.subtotal || 0), 0));
     const nonConfirmedItem = items.find((item) => item.status !== 'confirmed') || null;
     const status = nonConfirmedItem ? nonConfirmedItem.status : 'confirmed';
+    const resolvedVendorName = vendor.startsWith('backordered-') ? 'None' : vendor;
     return {
       soid: null,
       draft_id: draftId,
       csoid,
-      vendor_name: vendor,
+      vendor_name: resolvedVendorName,
       status,
       subtotal,
       tax_total: 0,
@@ -150,8 +146,12 @@ export default function DashboardPage({ userEmail, onLogout }) {
   const [skuAssignments, setSkuAssignments] = useState({});
   const [assignmentErrors, setAssignmentErrors] = useState({});
   const [supplierOrders, setSupplierOrders] = useState([]);
+  const [globalBackorderedOrders, setGlobalBackorderedOrders] = useState([]);
   const [supplierFinancialDrafts, setSupplierFinancialDrafts] = useState({});
-  const [isAssignmentEditing, setIsAssignmentEditing] = useState(false);
+  const [orderMessages, setOrderMessages] = useState({});
+  const [supplierStatusFilter, setSupplierStatusFilter] = useState('all');
+  const [globalBackorderedCount, setGlobalBackorderedCount] = useState(0);
+  const [globalBackorderedLoading, setGlobalBackorderedLoading] = useState(false);
   const [editingOrderKeys, setEditingOrderKeys] = useState({});
   const [savingOrderKeys, setSavingOrderKeys] = useState({});
   const vendorOptions = useMemo(() => {
@@ -175,6 +175,67 @@ export default function DashboardPage({ userEmail, onLogout }) {
     return ['None', ...combined];
   }, [selectedWebsite, skuAssignments, supplierOrders]);
 
+  const filteredSupplierOrders = useMemo(() => {
+    if (supplierStatusFilter === 'backordered') {
+      return supplierOrders.filter((order) => String(order.status || '').toLowerCase() === 'backordered');
+    }
+
+    return supplierOrders;
+  }, [supplierOrders, supplierStatusFilter]);
+
+  const hydrateFinancialDrafts = (orders, openBackorderedForEdit = false) => {
+    if (openBackorderedForEdit) {
+      const editableKeys = Object.fromEntries(
+        (orders || [])
+          .filter((order) => String(order.status || '').toLowerCase() === 'backordered')
+          .map((order) => [getOrderKey(order), true])
+      );
+      setEditingOrderKeys(editableKeys);
+    } else {
+      setEditingOrderKeys({});
+    }
+
+    setSupplierFinancialDrafts((prev) => {
+      const next = { ...prev };
+      for (const order of orders || []) {
+        const orderKey = getOrderKey(order);
+        const current = prev[orderKey] || {};
+        next[orderKey] = {
+          vendor_name: current.vendor_name ?? (order.vendor_name || 'None'),
+          vendor_website_order_date: current.vendor_website_order_date ?? (order.vendor_website_order_date || ''),
+          vendor_website_order_number: current.vendor_website_order_number ?? (order.vendor_website_order_number || ''),
+          status: current.status ?? (order.status || 'confirmed'),
+          tax_total: current.tax_total ?? formatMoney(order.tax_total),
+          shipping_total: current.shipping_total ?? formatMoney(order.shipping_total),
+          discount_total: current.discount_total ?? formatMoney(order.discount_total),
+          refund_total: current.refund_total ?? formatMoney(order.refund_total),
+          comments: current.comments ?? (order.comments || ''),
+        };
+      }
+      return next;
+    });
+  };
+
+  const refreshGlobalBackorderedCount = async () => {
+    setGlobalBackorderedLoading(true);
+    try {
+      const allBackordered = await fetchAllBackorderedOrders();
+      setGlobalBackorderedOrders(allBackordered);
+      setGlobalBackorderedCount(allBackordered.length);
+      return allBackordered;
+    } catch {
+      setGlobalBackorderedOrders([]);
+      setGlobalBackorderedCount(0);
+      return [];
+    } finally {
+      setGlobalBackorderedLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshGlobalBackorderedCount();
+  }, []);
+
   const initializeAssignments = (fetchedItems) => {
     const nextAssignments = {};
     for (const item of fetchedItems) {
@@ -193,43 +254,35 @@ export default function DashboardPage({ userEmail, onLogout }) {
     setAssignmentErrors({});
   };
 
-  const loadSupplierOrders = async (csoid) => {
+  const loadSupplierOrders = async (csoid, statusFilter = supplierStatusFilter, openBackorderedForEdit = false) => {
     if (!csoid) {
       setSupplierOrders([]);
-      return;
+      return [];
     }
 
     setSupplierLoading(true);
     setSupplierError('');
     try {
-      const data = await fetchSupplierOrders(csoid);
+      const data = await fetchSupplierOrders(csoid, statusFilter === 'all' ? '' : statusFilter);
       setSupplierOrders(data);
-      setEditingOrderKeys({});
-      setSupplierFinancialDrafts((prev) => {
-        const next = {};
-        for (const order of data) {
-          const orderKey = getOrderKey(order);
-          const current = prev[orderKey] || {};
-          next[orderKey] = {
-            vendor_name: current.vendor_name ?? (order.vendor_name || 'None'),
-            vendor_website_order_date: current.vendor_website_order_date ?? (order.vendor_website_order_date || ''),
-            vendor_website_order_number: current.vendor_website_order_number ?? (order.vendor_website_order_number || ''),
-            status: current.status ?? (order.status || 'confirmed'),
-            tax_total: current.tax_total ?? formatMoney(order.tax_total),
-            shipping_total: current.shipping_total ?? formatMoney(order.shipping_total),
-            discount_total: current.discount_total ?? formatMoney(order.discount_total),
-            refund_total: current.refund_total ?? formatMoney(order.refund_total),
-            comments: current.comments ?? (order.comments || ''),
-          };
-        }
-        return next;
-      });
+      hydrateFinancialDrafts(data, openBackorderedForEdit);
+      await refreshGlobalBackorderedCount();
+      return data;
     } catch (error) {
       setSupplierOrders([]);
       setSupplierFinancialDrafts({});
       setSupplierError(error.message || 'Unable to load supplier orders');
+      return [];
     } finally {
       setSupplierLoading(false);
+    }
+  };
+
+  const handleSupplierStatusFilterChange = async (nextFilter) => {
+    setSupplierStatusFilter(nextFilter);
+    const csoidValue = Number(selectedOrder?.CSOID ?? selectedOrder?.csoid ?? 0);
+    if (csoidValue) {
+      await loadSupplierOrders(csoidValue, nextFilter);
     }
   };
 
@@ -240,7 +293,6 @@ export default function DashboardPage({ userEmail, onLogout }) {
       setSkuAssignments({});
       setSupplierOrders([]);
       setSupplierFinancialDrafts({});
-      setIsAssignmentEditing(false);
       return;
     }
 
@@ -248,20 +300,19 @@ export default function DashboardPage({ userEmail, onLogout }) {
     setItemsError('');
     setSupplierError('');
     setSuccessMessage('');
+    setOrderMessages({});
 
     try {
       const fetchedItems = await fetchOrderItems(csoid);
       setItems(fetchedItems);
       initializeAssignments(fetchedItems);
-      setIsAssignmentEditing(false);
-      await loadSupplierOrders(csoid);
+      await loadSupplierOrders(csoid, supplierStatusFilter);
     } catch (error) {
       setItems([]);
       setSkuAssignments({});
       setItemsError(error.message || 'Unable to load order items');
       setSupplierOrders([]);
       setSupplierFinancialDrafts({});
-      setIsAssignmentEditing(false);
     } finally {
       setItemsLoading(false);
     }
@@ -290,7 +341,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
       setItems([]);
       setSupplierOrders([]);
       setSupplierFinancialDrafts({});
-      setIsAssignmentEditing(false);
+      setOrderMessages({});
 
       if (results.length > 0) {
         setSelectedOrder(results[0]);
@@ -307,7 +358,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
       setSkuAssignments({});
       setSupplierOrders([]);
       setSupplierFinancialDrafts({});
-      setIsAssignmentEditing(false);
+      setOrderMessages({});
     } finally {
       setOrdersLoading(false);
     }
@@ -426,7 +477,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
       };
 
       await createSupplierOrders(createPayload);
-      const persistedOrders = await fetchSupplierOrders(csoid);
+      const persistedOrders = await fetchSupplierOrders(csoid, supplierStatusFilter === 'all' ? '' : supplierStatusFilter);
       setSupplierOrders(persistedOrders);
       setSupplierFinancialDrafts(
         Object.fromEntries(
@@ -445,6 +496,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
           ])
         )
       );
+      await refreshGlobalBackorderedCount();
       setSuccessMessage('Supplier orders created. Review the saved SOIDs and fill in the fields below.');
     } catch (error) {
       setSupplierError(error.message || 'Unable to generate supplier orders');
@@ -533,6 +585,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
       if (getOrderKey(order) !== String(soid)) {
         return order;
       }
+      const lockedOrderStatus = String(order.status || 'confirmed').toLowerCase();
       const nextItems = (order.items || []).map((item) => {
         if (item.id !== itemId) {
           return item;
@@ -557,7 +610,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
         ...order,
         items: nextItems,
         subtotal: nextSubtotal,
-        status: deriveOrderStatusFromItems(nextItems),
+        status: lockedOrderStatus,
       };
     }));
   };
@@ -568,14 +621,13 @@ export default function DashboardPage({ userEmail, onLogout }) {
     const tax = roundToTwo(draft.tax_total || 0);
     const shipping = roundToTwo(draft.shipping_total || 0);
     const discount = roundToTwo(draft.discount_total || 0);
-    const refund = roundToTwo(draft.refund_total || 0);
-    return roundToTwo(subtotal + tax + shipping - discount - refund);
+    return roundToTwo(subtotal + tax + shipping - discount);
   };
 
   const handleToggleOrderEdit = (orderKey) => {
     const isCurrentlyEditing = editingOrderKeys[orderKey];
     
-    // If closing edit mode (clicking Done), discard unsaved changes
+    // If closing edit mode (clicking Cancel), discard unsaved changes
     if (isCurrentlyEditing) {
       setSupplierFinancialDrafts((prev) => {
         const updated = { ...prev };
@@ -694,25 +746,35 @@ export default function DashboardPage({ userEmail, onLogout }) {
   const handleSaveSingleOrder = async (order) => {
     const orderKey = getOrderKey(order);
     if (!order?.soid) {
-      setSupplierError('Cannot save this order because SOID is missing. Regenerate supplier orders.');
+      setOrderMessages((prev) => ({
+        ...prev,
+        [orderKey]: { type: 'error', text: 'Cannot save this order because SOID is missing. Regenerate supplier orders.' },
+      }));
       return;
     }
 
     const validationError = validateSingleSupplierOrder(order);
     if (validationError) {
-      setSupplierError(validationError);
+      setOrderMessages((prev) => ({
+        ...prev,
+        [orderKey]: { type: 'error', text: validationError },
+      }));
       return;
     }
 
-    setSupplierError('');
-    setSuccessMessage('');
     setSavingOrderKeys((prev) => ({ ...prev, [orderKey]: true }));
 
     try {
       const orderPayload = buildOrderPayload(order);
       await updateSupplierOrder(order.soid, buildUpdatePayload(orderPayload));
-      await loadSupplierOrders(Number(selectedOrder?.CSOID ?? selectedOrder?.csoid ?? 0));
-      setSuccessMessage(`SOID ${order.soid} saved successfully.`);
+
+      await loadSupplierOrders(Number(selectedOrder?.CSOID ?? selectedOrder?.csoid ?? 0), supplierStatusFilter);
+      await refreshGlobalBackorderedCount();
+
+      setOrderMessages((prev) => ({
+        ...prev,
+        [orderKey]: { type: 'success', text: `SOID ${order.soid} saved successfully.` },
+      }));
       
       // Close edit mode after successful save
       setEditingOrderKeys((prev) => {
@@ -728,7 +790,10 @@ export default function DashboardPage({ userEmail, onLogout }) {
         return next;
       });
     } catch (error) {
-      setSupplierError(error.message || `Unable to save SOID ${order.soid}`);
+      setOrderMessages((prev) => ({
+        ...prev,
+        [orderKey]: { type: 'error', text: error.message || `Unable to save SOID ${order.soid}` },
+      }));
     } finally {
       setSavingOrderKeys((prev) => {
         const next = { ...prev };
@@ -848,6 +913,39 @@ export default function DashboardPage({ userEmail, onLogout }) {
   return (
     <AppShell userEmail={userEmail} onLogout={onLogout}>
       <div className="dashboard-layout">
+        <section className="panel backorder-global-panel">
+          <div className="panel-head">
+            <h3>Backordered Orders</h3>
+          </div>
+          <BackorderWidget count={globalBackorderedCount} />
+
+          {globalBackorderedLoading ? <p className="status-text">Loading backordered SOIDs...</p> : null}
+          {!globalBackorderedLoading && globalBackorderedOrders.length === 0 ? (
+            <p className="status-text">No backordered orders found.</p>
+          ) : null}
+
+          {!globalBackorderedLoading && globalBackorderedOrders.length > 0 ? (
+            <div className="backorder-list-wrap">
+              <table className="data-table backorder-list-table">
+                <thead>
+                  <tr>
+                    <th>SOID</th>
+                    <th>PO</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {globalBackorderedOrders.map((order) => (
+                    <tr key={`backorder-row-${order.soid}`}>
+                      <td>#{order.soid}</td>
+                      <td>{order.cust_order_number ? `#${order.cust_order_number}` : '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </section>
+
         <section className="dashboard-half order-data-half">
           <h2 className="section-heading">Order Data</h2>
           <OrderSearchCard
@@ -901,17 +999,8 @@ export default function DashboardPage({ userEmail, onLogout }) {
 
               <button
                 type="button"
-                className="ghost"
-                onClick={() => setIsAssignmentEditing((prev) => !prev)}
-                disabled={items.length === 0}
-              >
-                {isAssignmentEditing ? 'Done' : 'Edit'}
-              </button>
-
-              <button
-                type="button"
                 onClick={generateSupplierOrders}
-                disabled={savingSupplier || items.length === 0 || isAssignmentEditing}
+                disabled={savingSupplier || items.length === 0}
               >
                 {savingSupplier ? 'Generating...' : 'Generate Supplier Orders'}
               </button>
@@ -955,7 +1044,6 @@ export default function DashboardPage({ userEmail, onLogout }) {
                         <td>
                           <select
                             value={entry.vendor_name || 'None'}
-                            disabled={!isAssignmentEditing}
                             onChange={(event) => handleAssignmentChange(skuKey, 'vendor_name', event.target.value)}
                           >
                             <option value="None">None</option>
@@ -968,7 +1056,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
                           <input
                             type="text"
                             value={entry.unit_price || ''}
-                            disabled={!isAssignmentEditing || (entry.vendor_name || 'None').toLowerCase() === 'none'}
+                            disabled={(entry.vendor_name || 'None').toLowerCase() === 'none'}
                             onChange={(event) => handleAssignmentChange(skuKey, 'unit_price', event.target.value)}
                           />
                         </td>
@@ -983,40 +1071,50 @@ export default function DashboardPage({ userEmail, onLogout }) {
           </section>
 
           <section className="supplier-card-list">
+            <div className="panel-head">
+              <h3>Supplier Orders</h3>
+            </div>
             {supplierLoading ? <p className="status-text">Loading supplier orders...</p> : null}
 
             {!supplierLoading && supplierOrders.length === 0 ? (
               <p className="status-text">No supplier orders yet for this CSOID.</p>
             ) : null}
 
-            {supplierOrders.map((order) => {
-              const orderKey = getOrderKey(order);
-              return (
-                <SupplierOrderCard
-                  key={orderKey}
-                  order={order}
-                  financialDraft={supplierFinancialDrafts[orderKey] || {
-                    vendor_name: order.vendor_name || 'None',
-                    status: order.status || 'confirmed',
-                    vendor_website_order_date: order.vendor_website_order_date || '',
-                    vendor_website_order_number: order.vendor_website_order_number || '',
-                    tax_total: formatMoney(order.tax_total),
-                    shipping_total: formatMoney(order.shipping_total),
-                    discount_total: formatMoney(order.discount_total),
-                    refund_total: formatMoney(order.refund_total),
-                    comments: order.comments || '',
-                  }}
-                  onFinancialChange={handleFinancialDraftChange}
-                  onItemChange={handleOrderItemChange}
-                  isEditing={Boolean(editingOrderKeys[orderKey])}
-                  onToggleEdit={() => handleToggleOrderEdit(orderKey)}
-                  onSave={() => handleSaveSingleOrder(order)}
-                  isSaving={Boolean(savingOrderKeys[orderKey])}
-                  vendorOptions={vendorOptions}
-                  previewGrandTotal={getGrandTotalPreview(order)}
-                />
-              );
-            })}
+            {!supplierLoading && supplierOrders.length > 0 && filteredSupplierOrders.length === 0 ? (
+              <p className="status-text">No backordered supplier orders found for this selection.</p>
+            ) : null}
+
+            <div className="supplier-card-grid">
+              {filteredSupplierOrders.map((order) => {
+                const orderKey = getOrderKey(order);
+                return (
+                  <SupplierOrderCard
+                    key={orderKey}
+                    order={order}
+                    financialDraft={supplierFinancialDrafts[orderKey] || {
+                      vendor_name: order.vendor_name || 'None',
+                      status: order.status || 'confirmed',
+                      vendor_website_order_date: order.vendor_website_order_date || '',
+                      vendor_website_order_number: order.vendor_website_order_number || '',
+                      tax_total: formatMoney(order.tax_total),
+                      shipping_total: formatMoney(order.shipping_total),
+                      discount_total: formatMoney(order.discount_total),
+                      refund_total: formatMoney(order.refund_total),
+                      comments: order.comments || '',
+                    }}
+                    onFinancialChange={handleFinancialDraftChange}
+                    onItemChange={handleOrderItemChange}
+                    isEditing={Boolean(editingOrderKeys[orderKey])}
+                    onToggleEdit={() => handleToggleOrderEdit(orderKey)}
+                    onSave={() => handleSaveSingleOrder(order)}
+                    isSaving={Boolean(savingOrderKeys[orderKey])}
+                    vendorOptions={vendorOptions}
+                    previewGrandTotal={getGrandTotalPreview(order)}
+                    orderMessage={orderMessages[orderKey] || null}
+                  />
+                );
+              })}
+            </div>
 
 
           </section>

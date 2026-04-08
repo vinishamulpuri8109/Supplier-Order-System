@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.models import SupplierOrder, SupplierOrderItem
@@ -228,7 +229,9 @@ def create_supplier_orders(
         product_name = (incoming.get("product_name") or "").strip() or sku
         vendor_name = _normalize_vendor(incoming.get("vendor_name", ""))
 
-        grouped.setdefault(vendor_name, []).append(
+        group_key = vendor_name if vendor_name != "None" else f"backordered-{sku}"
+
+        grouped.setdefault(group_key, []).append(
             {
                 "sku": sku,
                 "product_name": product_name,
@@ -245,7 +248,8 @@ def create_supplier_orders(
 
     created_orders: list[SupplierOrder] = []
 
-    for vendor_name, vendor_items in grouped.items():
+    for group_key, vendor_items in grouped.items():
+        vendor_name = "None" if group_key.startswith("backordered-") else group_key
         header_vendor_order_date = next(
             (item.get("vendor_website_order_date") for item in vendor_items if item.get("vendor_website_order_date")),
             None,
@@ -304,11 +308,31 @@ def create_supplier_orders(
     return created_orders
 
 
-def get_supplier_orders_by_csoid(db: Session, csoid: int) -> list[SupplierOrder]:
-    return (
+def get_supplier_orders_by_csoid(db: Session, csoid: int, status_filter: str | None = None) -> list[SupplierOrder]:
+    query = (
         db.query(SupplierOrder)
         .filter(SupplierOrder.csoid == csoid)
-        .order_by(SupplierOrder.soid.asc())
+    )
+
+    if status_filter:
+        normalized_status = status_filter.strip().lower()
+        allowed_statuses = {"confirmed", "backordered", "cancelled", "returned"}
+        if normalized_status not in allowed_statuses:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"status must be one of: {', '.join(sorted(allowed_statuses))}",
+            )
+        query = query.filter(func.lower(SupplierOrder.status) == normalized_status)
+
+    return query.order_by(SupplierOrder.soid.asc()).all()
+
+
+def get_all_backordered_orders(db: Session) -> list[SupplierOrder]:
+    """Get all backordered supplier orders across all CSIDs."""
+    return (
+        db.query(SupplierOrder)
+        .filter(func.lower(SupplierOrder.status) == "backordered")
+        .order_by(SupplierOrder.csoid.asc(), SupplierOrder.soid.asc())
         .all()
     )
 

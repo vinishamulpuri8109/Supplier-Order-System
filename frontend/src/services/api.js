@@ -153,8 +153,21 @@ export async function createSupplierOrders(payload) {
   });
 }
 
-export async function fetchSupplierOrders(csoid) {
-  const data = await fetchWithFallback([`/supplier/orders/${csoid}`]);
+export async function fetchSupplierOrders(csoid, statusFilter) {
+  const params = new URLSearchParams();
+  if (statusFilter) {
+    params.set('status', statusFilter);
+  }
+  const queryString = params.toString();
+  const data = await fetchWithFallback([`/supplier/orders/${csoid}${queryString ? `?${queryString}` : ''}`]);
+  if (Array.isArray(data)) {
+    return data;
+  }
+  return [];
+}
+
+export async function fetchAllBackorderedOrders() {
+  const data = await fetchWithFallback(['/supplier/orders/status/backordered']);
   if (Array.isArray(data)) {
     return data;
   }

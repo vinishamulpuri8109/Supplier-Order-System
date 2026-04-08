@@ -15,6 +15,7 @@ export default function SupplierOrderCard({
   isSaving = false,
   vendorOptions = [],
   previewGrandTotal,
+  orderMessage = null,
 }) {
   const normalizedOrder = useMemo(() => ({
     ...order,
@@ -41,11 +42,12 @@ export default function SupplierOrderCard({
         <div>
           <p className="order-id-label">SOID</p>
           <h3>#{normalizedOrder.soid}</h3>
+          {normalizedOrder.cust_order_number ? <p className="order-po-label">PO #{normalizedOrder.cust_order_number}</p> : null}
         </div>
         <div className="order-head-actions">
           <div className="order-action-row">
             <button type="button" className="ghost" onClick={onToggleEdit}>
-              {isEditing ? 'Done' : 'Edit'}
+              {isEditing ? 'Cancel' : 'Edit'}
             </button>
             <button
               type="button"
@@ -82,6 +84,12 @@ export default function SupplierOrderCard({
           </label>
         </div>
       </header>
+
+      {orderMessage?.text ? (
+        <p className={`order-inline-message ${orderMessage.type === 'error' ? 'error-text' : 'success-text'}`}>
+          {orderMessage.text}
+        </p>
+      ) : null}
 
       <div className="sku-grid">
         {normalizedOrder.items.map((item, idx) => (
