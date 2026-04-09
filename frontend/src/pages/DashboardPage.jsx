@@ -135,6 +135,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
 
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [itemsLoading, setItemsLoading] = useState(false);
+  const [assignmentsLoading, setAssignmentsLoading] = useState(false);
   const [supplierLoading, setSupplierLoading] = useState(false);
   const [savingSupplier, setSavingSupplier] = useState(false);
   const [deletingByPo, setDeletingByPo] = useState(false);
@@ -289,7 +290,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
       const data = await fetchSupplierOrders(csoid, statusFilter === 'all' ? '' : statusFilter);
       setSupplierOrders(data);
       hydrateFinancialDrafts(data, openBackorderedForEdit);
-      await refreshGlobalBackorderedCount();
+      refreshGlobalBackorderedCount();
       return data;
     } catch (error) {
       setSupplierOrders([]);
@@ -320,15 +321,17 @@ export default function DashboardPage({ userEmail, onLogout }) {
     }
 
     setItemsLoading(true);
+    setAssignmentsLoading(true);
     setItemsError('');
     setSupplierError('');
     setSuccessMessage('');
     setOrderMessages({});
 
     try {
+      const supplierOrdersPromise = loadSupplierOrders(csoid, supplierStatusFilter);
       const fetchedItems = await fetchOrderItems(csoid);
       setItems(fetchedItems);
-      const loadedOrders = await loadSupplierOrders(csoid, supplierStatusFilter);
+      const loadedOrders = await supplierOrdersPromise;
       initializeAssignments(fetchedItems, loadedOrders, order);
     } catch (error) {
       setItems([]);
@@ -337,6 +340,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
       setSupplierOrders([]);
       setSupplierFinancialDrafts({});
     } finally {
+      setAssignmentsLoading(false);
       setItemsLoading(false);
     }
   };
@@ -1153,9 +1157,11 @@ export default function DashboardPage({ userEmail, onLogout }) {
                         <td>{entry.product_name || resolveItemField(item, ['ProductName', 'product_name'])}</td>
                         <td>
                           <select
-                            value={entry.vendor_name || 'None'}
+                            value={assignmentsLoading && !entry.vendor_name ? '' : (entry.vendor_name || 'None')}
+                            disabled={assignmentsLoading}
                             onChange={(event) => handleAssignmentChange(skuKey, 'vendor_name', event.target.value)}
                           >
+                            <option value="" disabled>{assignmentsLoading ? 'Loading...' : 'Select vendor'}</option>
                             <option value="None">None</option>
                             {vendorOptions.map((vendor) => (
                               vendor === 'None' ? null : <option key={vendor} value={vendor}>{vendor}</option>
