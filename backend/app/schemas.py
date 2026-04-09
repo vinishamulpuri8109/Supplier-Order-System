@@ -292,10 +292,17 @@ class SupplierOrderBatchCreateRequest(BaseModel):
 
 
 class SupplierOrderItemUpdate(BaseModel):
-    id: int = Field(..., gt=0)
+    sku: str = Field(..., min_length=1)
     unit_price: Decimal | None = Field(default=None, ge=0, max_digits=10, decimal_places=2)
     quantity: int | None = Field(default=None, gt=0)
     status: Literal["confirmed", "backordered", "cancelled", "returned"] | None = None
+
+    @field_validator("sku")
+    def update_sku_valid(cls, value: str) -> str:
+        cleaned = value.strip().upper()
+        if not cleaned:
+            raise ValueError("sku is required")
+        return cleaned
 
 
 class SupplierOrderUpdateRequest(BaseModel):
@@ -364,7 +371,6 @@ class SupplierOrderBulkDeleteByPoResponse(BaseModel):
 
 
 class SupplierOrderItemResponse(BaseModel):
-    id: int
     soid: int
     csoid: int
     cust_order_number: str | None = None

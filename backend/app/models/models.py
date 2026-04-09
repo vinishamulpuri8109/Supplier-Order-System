@@ -61,14 +61,13 @@ class SupplierOrderItem(Base):
 
     __tablename__ = "supplier_order_items"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    soid = Column(Integer, ForeignKey("supplier_orders.soid", ondelete="CASCADE"), nullable=False, index=True)
+    soid = Column(Integer, ForeignKey("supplier_orders.soid", ondelete="CASCADE"), primary_key=True, nullable=False, index=True)
     csoid = Column(Integer, nullable=False, index=True)
     cust_order_number = Column(String(100), nullable=True, index=True)
     availability_status = Column(String(20), nullable=False, default="confirmed")
     expected_date = Column(Date, nullable=True)
     vendor_note = Column(String(255), nullable=True)
-    sku = Column(String(120), nullable=False)
+    sku = Column(String(120), primary_key=True, nullable=False)
     product_name = Column(String(255), nullable=False)
     quantity = Column(Integer, nullable=False)
     unit_price = Column(Numeric(10, 2), nullable=False)
@@ -78,11 +77,10 @@ class SupplierOrderItem(Base):
 
     __table_args__ = (
         UniqueConstraint("csoid", "sku", name="uq_supplier_order_items_csoid_sku"),
-        UniqueConstraint("soid", "sku", name="uq_supplier_order_items_soid_sku"),
     )
 
     def __repr__(self):
-        return f"<SupplierOrderItem(id={self.id}, soid={self.soid}, csoid={self.csoid}, sku={self.sku})>"
+        return f"<SupplierOrderItem(soid={self.soid}, csoid={self.csoid}, sku={self.sku})>"
 
 
 class User(Base):

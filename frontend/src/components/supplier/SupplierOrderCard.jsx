@@ -93,7 +93,7 @@ export default function SupplierOrderCard({
 
       <div className="sku-grid">
         {normalizedOrder.items.map((item, idx) => (
-          <div key={item.id} className="sku-row">
+          <div key={item.sku} className="sku-row">
             <div>
               <strong>{item.sku}</strong>
               <p>{item.product_name}</p>
@@ -105,7 +105,7 @@ export default function SupplierOrderCard({
                 min="1"
                 value={item.quantity}
                 disabled={isReadOnly}
-                onChange={(event) => onItemChange(orderKey, item.id, 'quantity', event.target.value)}
+                onChange={(event) => onItemChange(orderKey, item.sku, 'quantity', event.target.value)}
               />
             </label>
             <label>
@@ -114,7 +114,7 @@ export default function SupplierOrderCard({
                 type="text"
                 value={item.unit_price}
                 disabled={isReadOnly || currentStatus !== 'confirmed'}
-                onChange={(event) => onItemChange(orderKey, item.id, 'unit_price', event.target.value)}
+                onChange={(event) => onItemChange(orderKey, item.sku, 'unit_price', event.target.value)}
               />
             </label>
             <div className="readonly-field">

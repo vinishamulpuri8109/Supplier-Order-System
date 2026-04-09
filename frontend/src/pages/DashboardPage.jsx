@@ -47,7 +47,7 @@ function normalizeMoneyInput(nextValue, previousValue) {
 }
 
 function getItemKey(item) {
-  return String(item.Sku ?? item.sku ?? item.orderItemId ?? item.id ?? '');
+  return String(item.Sku ?? item.sku ?? item.orderItemId ?? '');
 }
 
 function getOrderKey(order) {
@@ -75,7 +75,7 @@ function buildLocalSupplierOrders(csoid, assignments) {
     }
 
     const quantity = Number(assignment.quantity || 0);
-    const unitPrice = vendor === 'None' ? 0 : roundToTwo(assignment.unit_price || 0);
+    const unitPrice = 0;
     const subtotal = roundToTwo(quantity * unitPrice);
 
     grouped[groupKey].push({
@@ -156,6 +156,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
   const [globalBackorderedLoading, setGlobalBackorderedLoading] = useState(false);
   const [editingOrderKeys, setEditingOrderKeys] = useState({});
   const [savingOrderKeys, setSavingOrderKeys] = useState({});
+  const [orderEditSnapshots, setOrderEditSnapshots] = useState({});
   const vendorOptions = useMemo(() => {
     // Get vendors from selected website (primary source)
     const fromWebsite = selectedWebsite ? (WEBSITE_VENDOR_MAP[selectedWebsite] || []) : [];
@@ -238,18 +239,39 @@ export default function DashboardPage({ userEmail, onLogout }) {
     refreshGlobalBackorderedCount();
   }, []);
 
-  const initializeAssignments = (fetchedItems) => {
+  const initializeAssignments = (fetchedItems, existingOrders = [], orderContext = selectedOrder) => {
+    const persistedBySku = {};
+    for (const order of existingOrders || []) {
+      const vendorName = String(order?.vendor_name || 'None').trim() || 'None';
+      for (const item of order?.items || []) {
+        const sku = String(item?.sku || '').trim().toUpperCase();
+        if (!sku || persistedBySku[sku]) {
+          continue;
+        }
+        persistedBySku[sku] = {
+          vendor_name: vendorName,
+          status: String(item?.status || item?.availability_status || '').trim().toLowerCase(),
+        };
+      }
+    }
+
     const nextAssignments = {};
     for (const item of fetchedItems) {
       const key = getItemKey(item);
+      const sku = String(resolveItemField(item, ['Sku', 'sku'])).trim().toUpperCase();
+      const quantity = Number(resolveItemField(item, ['Quantity', 'quantity']) || 0);
+      const persisted = persistedBySku[sku];
+      const persistedVendor = String(persisted?.vendor_name || 'None').trim() || 'None';
+      const nextStatus = persistedVendor.toLowerCase() === 'none' ? 'backordered' : 'confirmed';
+
       nextAssignments[key] = {
-        sku: String(resolveItemField(item, ['Sku', 'sku'])).toUpperCase(),
-        product_name: String(resolveItemField(item, ['ProductName', 'product_name'])) || String(resolveItemField(item, ['Sku', 'sku'])),
-        quantity: Number(resolveItemField(item, ['Quantity', 'quantity']) || 0),
-        cust_order_number: String(selectedOrder?.CustOrderNumber ?? selectedOrder?.cust_order_number ?? '').trim(),
-        status: 'backordered',
-        vendor_name: 'None',
-        unit_price: '0.00',
+        sku,
+        product_name: String(resolveItemField(item, ['ProductName', 'product_name'])) || sku,
+        quantity,
+        cust_order_number: String(orderContext?.CustOrderNumber ?? orderContext?.cust_order_number ?? '').trim(),
+        status: nextStatus,
+        vendor_name: persistedVendor,
+        unit_price: 0,
       };
     }
     setSkuAssignments(nextAssignments);
@@ -307,8 +329,8 @@ export default function DashboardPage({ userEmail, onLogout }) {
     try {
       const fetchedItems = await fetchOrderItems(csoid);
       setItems(fetchedItems);
-      initializeAssignments(fetchedItems);
-      await loadSupplierOrders(csoid, supplierStatusFilter);
+      const loadedOrders = await loadSupplierOrders(csoid, supplierStatusFilter);
+      initializeAssignments(fetchedItems, loadedOrders, order);
     } catch (error) {
       setItems([]);
       setSkuAssignments({});
@@ -412,8 +434,6 @@ export default function DashboardPage({ userEmail, onLogout }) {
 
     for (const [key, assignment] of Object.entries(skuAssignments)) {
       const rowErrors = [];
-      const unitPrice = Number(assignment.unit_price || 0);
-      const quantity = Number(assignment.quantity || 0);
       const itemStatus = String(assignment.vendor_name || 'None').trim().toLowerCase() === 'none' ? 'backordered' : 'confirmed';
 
       if (!ITEM_STATUSES.includes(itemStatus)) {
@@ -422,14 +442,6 @@ export default function DashboardPage({ userEmail, onLogout }) {
 
       if (itemStatus === 'confirmed' && !(assignment.vendor_name || '').trim()) {
         rowErrors.push('Vendor is required');
-      }
-      if (!MONEY_INPUT_REGEX.test(String(assignment.unit_price || ''))) {
-        rowErrors.push('Unit price can have at most 2 decimals');
-      } else if (itemStatus === 'confirmed' && (!Number.isFinite(unitPrice) || unitPrice <= 0)) {
-        rowErrors.push('Unit price must be greater than 0');
-      }
-      if (!Number.isInteger(quantity) || quantity <= 0) {
-        rowErrors.push('Quantity must be greater than 0');
       }
 
       if (rowErrors.length > 0) {
@@ -627,14 +639,14 @@ export default function DashboardPage({ userEmail, onLogout }) {
     });
   };
 
-  const handleOrderItemChange = (soid, itemId, field, value) => {
+  const handleOrderItemChange = (soid, itemSku, field, value) => {
     setSupplierOrders((prev) => prev.map((order) => {
       if (getOrderKey(order) !== String(soid)) {
         return order;
       }
       const lockedOrderStatus = String(order.status || 'confirmed').toLowerCase();
       const nextItems = (order.items || []).map((item) => {
-        if (item.id !== itemId) {
+        if (String(item.sku || '').toUpperCase() !== String(itemSku || '').toUpperCase()) {
           return item;
         }
         const nextItem = { ...item };
@@ -671,21 +683,68 @@ export default function DashboardPage({ userEmail, onLogout }) {
     return roundToTwo(subtotal + tax + shipping - discount);
   };
 
+  const cloneForSnapshot = (value) => JSON.parse(JSON.stringify(value));
+
   const handleToggleOrderEdit = (orderKey) => {
     const isCurrentlyEditing = editingOrderKeys[orderKey];
-    
+    const normalizedOrderKey = String(orderKey);
+
+    if (!isCurrentlyEditing) {
+      const currentOrder = supplierOrders.find((order) => getOrderKey(order) === normalizedOrderKey);
+      if (currentOrder) {
+        setOrderEditSnapshots((prev) => ({
+          ...prev,
+          [normalizedOrderKey]: {
+            order: cloneForSnapshot(currentOrder),
+            draft: supplierFinancialDrafts[normalizedOrderKey]
+              ? cloneForSnapshot(supplierFinancialDrafts[normalizedOrderKey])
+              : null,
+          },
+        }));
+      }
+    }
+
     // If closing edit mode (clicking Cancel), discard unsaved changes
     if (isCurrentlyEditing) {
+      const snapshot = orderEditSnapshots[normalizedOrderKey];
+
+      if (snapshot?.order) {
+        setSupplierOrders((prev) => prev.map((order) => (
+          getOrderKey(order) === normalizedOrderKey ? snapshot.order : order
+        )));
+      }
+
       setSupplierFinancialDrafts((prev) => {
         const updated = { ...prev };
-        delete updated[orderKey];
+
+        if (snapshot?.draft) {
+          updated[normalizedOrderKey] = snapshot.draft;
+        } else {
+          delete updated[normalizedOrderKey];
+        }
+
         return updated;
       });
+
+      setOrderMessages((prev) => {
+        if (!prev[normalizedOrderKey]) {
+          return prev;
+        }
+        const next = { ...prev };
+        delete next[normalizedOrderKey];
+        return next;
+      });
+
+      setOrderEditSnapshots((prev) => {
+        const next = { ...prev };
+        delete next[normalizedOrderKey];
+        return next;
+      });
     }
-    
+
     setEditingOrderKeys((prev) => ({
       ...prev,
-      [orderKey]: !prev[orderKey],
+      [normalizedOrderKey]: !prev[normalizedOrderKey],
     }));
   };
 
@@ -759,10 +818,9 @@ export default function DashboardPage({ userEmail, onLogout }) {
       refund_total: roundToTwo(draft.refund_total || 0),
       grand_total: getGrandTotalPreview(order),
       items: (order.items || []).map((item) => ({
-        id: item.id,
+        sku: item.sku,
         soid: item.soid,
         csoid: item.csoid,
-        sku: item.sku,
         status: normalizedStatus,
         product_name: item.product_name,
         quantity: item.quantity,
@@ -781,7 +839,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
     status: (orderPayload.status || 'confirmed').toLowerCase(),
     vendor_name: String(orderPayload.vendor_name || 'None').trim() || 'None',
     items: (orderPayload.items || []).map((item) => ({
-      id: item.id,
+      sku: item.sku,
       quantity: Number(item.quantity || 0),
       unit_price: roundToTwo(item.unit_price || 0),
       status: (item.status || 'confirmed').toLowerCase(),
@@ -825,6 +883,12 @@ export default function DashboardPage({ userEmail, onLogout }) {
       
       // Close edit mode after successful save
       setEditingOrderKeys((prev) => {
+        const next = { ...prev };
+        delete next[orderKey];
+        return next;
+      });
+
+      setOrderEditSnapshots((prev) => {
         const next = { ...prev };
         delete next[orderKey];
         return next;
@@ -921,10 +985,9 @@ export default function DashboardPage({ userEmail, onLogout }) {
           refund_total: roundToTwo(draft.refund_total || 0),
           grand_total: getGrandTotalPreview(order),
           items: (order.items || []).map((item) => ({
-            id: item.id,
+            sku: item.sku,
             soid: item.soid,
             csoid: item.csoid,
-            sku: item.sku,
             status: normalizedStatus,
             product_name: item.product_name,
             quantity: item.quantity,
@@ -1030,7 +1093,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
 
           <section className="panel">
             <div className="panel-head">
-              <h3>Assign Vendor + Unit Price (preloaded SKUs only)</h3>
+              <h3>Assign Vendor (preloaded SKUs only)</h3>
             </div>
 
             <div className="assignment-controls">
@@ -1068,17 +1131,14 @@ export default function DashboardPage({ userEmail, onLogout }) {
                   <tr>
                     <th>SKU</th>
                     <th>Product</th>
-                    <th>Qty</th>
                     <th>Vendor</th>
-                    <th>Unit Price</th>
-                    <th>Subtotal</th>
                     <th>Error</th>
                   </tr>
                 </thead>
                 <tbody>
                   {items.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="empty-cell">
+                      <td colSpan={4} className="empty-cell">
                         Select a CSOID and load items first.
                       </td>
                     </tr>
@@ -1088,15 +1148,11 @@ export default function DashboardPage({ userEmail, onLogout }) {
                     const skuKey = getItemKey(item);
                     const entry = skuAssignments[skuKey] || {};
                     const errorText = assignmentErrors[skuKey] || '';
-                    const qty = Number(entry.quantity || 0);
-                    const unitPrice = Number(entry.unit_price || 0);
-                    const subtotal = roundToTwo(qty * unitPrice);
 
                     return (
                       <tr key={skuKey}>
                         <td>{entry.sku || resolveItemField(item, ['Sku', 'sku'])}</td>
                         <td>{entry.product_name || resolveItemField(item, ['ProductName', 'product_name'])}</td>
-                        <td>{entry.quantity || resolveItemField(item, ['Quantity', 'quantity'])}</td>
                         <td>
                           <select
                             value={entry.vendor_name || 'None'}
@@ -1108,15 +1164,6 @@ export default function DashboardPage({ userEmail, onLogout }) {
                             ))}
                           </select>
                         </td>
-                        <td>
-                          <input
-                            type="text"
-                            value={entry.unit_price || ''}
-                            disabled={(entry.vendor_name || 'None').toLowerCase() === 'none'}
-                            onChange={(event) => handleAssignmentChange(skuKey, 'unit_price', event.target.value)}
-                          />
-                        </td>
-                        <td>${formatMoney(subtotal)}</td>
                         <td className="error-text">{errorText}</td>
                       </tr>
                     );

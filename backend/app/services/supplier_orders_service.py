@@ -129,7 +129,6 @@ def _refresh_order_totals(order: SupplierOrder) -> MoneyTotals:
 def _serialize_item(item: SupplierOrderItem) -> dict:
     canonical_status = _normalize_item_status(item.availability_status)
     return {
-        "id": item.id,
         "soid": item.soid,
         "csoid": item.csoid,
         "cust_order_number": item.cust_order_number,
@@ -164,7 +163,7 @@ def serialize_order(order: SupplierOrder) -> dict:
         "status": canonical_order_status,
         "created_at": order.created_at,
         "updated_at": order.updated_at,
-        "items": [_serialize_item(item) for item in sorted(order.items, key=lambda x: x.id)],
+        "items": [_serialize_item(item) for item in sorted(order.items, key=lambda x: x.sku)],
     }
 
 
@@ -385,13 +384,15 @@ def update_supplier_order(
         order.refund_total = _money(order_totals.get("refund_total"), "refund_total")
 
     if item_updates:
-        item_map = {item.id: item for item in order.items}
+        item_map = {str(item.sku or "").strip().upper(): item for item in order.items}
         for incoming in item_updates:
-            item_id = int(incoming.get("id", 0))
-            if item_id not in item_map:
-                raise HTTPException(status_code=400, detail=f"Item id {item_id} is not part of soid {soid}")
+            incoming_sku = str(incoming.get("sku", "")).strip().upper()
+            if not incoming_sku:
+                raise HTTPException(status_code=400, detail="sku is required for item updates")
+            if incoming_sku not in item_map:
+                raise HTTPException(status_code=400, detail=f"SKU {incoming_sku} is not part of soid {soid}")
 
-            current_item = item_map[item_id]
+            current_item = item_map[incoming_sku]
             if "unit_price" in incoming:
                 current_item.unit_price = _money(incoming.get("unit_price"), "unit_price")
             if "quantity" in incoming:

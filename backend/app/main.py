@@ -167,10 +167,61 @@ def ensure_supplier_order_schema():
         "IF OBJECT_ID('supplier_orders', 'U') IS NOT NULL AND EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = 'ck_supplier_orders_status') ALTER TABLE supplier_orders DROP CONSTRAINT ck_supplier_orders_status",
         "IF OBJECT_ID('supplier_orders', 'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = 'ck_supplier_orders_status') ALTER TABLE supplier_orders ADD CONSTRAINT ck_supplier_orders_status CHECK (status IN ('confirmed', 'backordered', 'cancelled', 'returned'))",
         """
+        IF OBJECT_ID('supplier_order_items', 'U') IS NOT NULL AND COL_LENGTH('supplier_order_items', 'id') IS NOT NULL
+        BEGIN
+            IF OBJECT_ID('supplier_order_items_new', 'U') IS NOT NULL DROP TABLE supplier_order_items_new;
+
+            CREATE TABLE supplier_order_items_new (
+                soid INT NOT NULL,
+                csoid INT NOT NULL,
+                cust_order_number NVARCHAR(100) NULL,
+                availability_status NVARCHAR(20) NOT NULL CONSTRAINT df_supplier_order_items_new_availability DEFAULT ('confirmed'),
+                expected_date DATE NULL,
+                vendor_note NVARCHAR(255) NULL,
+                sku NVARCHAR(120) NOT NULL,
+                product_name NVARCHAR(255) NOT NULL,
+                quantity INT NOT NULL,
+                unit_price DECIMAL(10,2) NOT NULL,
+                subtotal DECIMAL(10,2) NOT NULL,
+                CONSTRAINT pk_supplier_order_items_new PRIMARY KEY (soid, sku),
+                CONSTRAINT fk_supplier_order_items_new_soid FOREIGN KEY (soid) REFERENCES supplier_orders(soid) ON DELETE CASCADE
+            );
+
+            INSERT INTO supplier_order_items_new (
+                soid,
+                csoid,
+                cust_order_number,
+                availability_status,
+                expected_date,
+                vendor_note,
+                sku,
+                product_name,
+                quantity,
+                unit_price,
+                subtotal
+            )
+            SELECT
+                soid,
+                csoid,
+                cust_order_number,
+                availability_status,
+                expected_date,
+                vendor_note,
+                sku,
+                product_name,
+                quantity,
+                unit_price,
+                subtotal
+            FROM supplier_order_items;
+
+            DROP TABLE supplier_order_items;
+            EXEC sp_rename 'supplier_order_items_new', 'supplier_order_items';
+        END
+        """,
+        """
         IF OBJECT_ID('supplier_order_items', 'U') IS NULL
         BEGIN
             CREATE TABLE supplier_order_items (
-                id INT IDENTITY(1,1) PRIMARY KEY,
                 soid INT NOT NULL,
                 csoid INT NOT NULL,
                 cust_order_number NVARCHAR(100) NULL,
@@ -182,6 +233,7 @@ def ensure_supplier_order_schema():
                 quantity INT NOT NULL,
                 unit_price DECIMAL(10,2) NOT NULL,
                 subtotal DECIMAL(10,2) NOT NULL,
+                CONSTRAINT pk_supplier_order_items PRIMARY KEY (soid, sku),
                 CONSTRAINT fk_supplier_order_items_soid FOREIGN KEY (soid) REFERENCES supplier_orders(soid) ON DELETE CASCADE
             );
         END
@@ -197,7 +249,7 @@ def ensure_supplier_order_schema():
         "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ix_supplier_order_items_csoid' AND object_id = OBJECT_ID('supplier_order_items')) CREATE INDEX ix_supplier_order_items_csoid ON supplier_order_items(csoid)",
         "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ix_supplier_order_items_cust_order_number' AND object_id = OBJECT_ID('supplier_order_items')) CREATE INDEX ix_supplier_order_items_cust_order_number ON supplier_order_items(cust_order_number)",
         "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'uq_supplier_order_items_csoid_sku' AND object_id = OBJECT_ID('supplier_order_items')) CREATE UNIQUE INDEX uq_supplier_order_items_csoid_sku ON supplier_order_items(csoid, sku)",
-        "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'uq_supplier_order_items_soid_sku' AND object_id = OBJECT_ID('supplier_order_items')) CREATE UNIQUE INDEX uq_supplier_order_items_soid_sku ON supplier_order_items(soid, sku)",
+        "IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'uq_supplier_order_items_soid_sku' AND object_id = OBJECT_ID('supplier_order_items')) DROP INDEX uq_supplier_order_items_soid_sku ON supplier_order_items",
     ]
 
     with engine.begin() as connection:

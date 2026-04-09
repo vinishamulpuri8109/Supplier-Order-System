@@ -1,9 +1,6 @@
 const INPUT_FIELDS = [
   { key: 'vendorOrderDate', label: 'VendorOrderDate', type: 'date', required: true },
   { key: 'vendorOrderNumber', label: 'VendorOrderNumber' },
-  { key: 'unitPrice', label: 'UnitPrice', type: 'text', inputMode: 'decimal', money: true },
-  { key: 'quantity', label: 'Quantity', type: 'text', inputMode: 'numeric', integer: true, required: true },
-  { key: 'subtotal', label: 'Subtotal', type: 'text', money: true, disabled: true },
   { key: 'tax', label: 'Tax', type: 'text', inputMode: 'decimal', money: true },
   { key: 'shipping', label: 'Shipping', type: 'text', inputMode: 'decimal', money: true },
   { key: 'discount', label: 'Discount', type: 'text', inputMode: 'decimal', money: true },
@@ -39,9 +36,6 @@ export default function SupplierOrderForm({
     !formData.vendorOrderNumber ||
     !formData.vendorName ||
     !formData.sku ||
-    !formData.quantity ||
-    !formData.unitPrice ||
-    !formData.subtotal ||
     !formData.grandTotal ||
     !selectedWebsite;
 
