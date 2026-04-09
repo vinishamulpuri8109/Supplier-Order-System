@@ -199,9 +199,13 @@ def search_orders(
         if where_clauses:
             where_sql = "WHERE " + " AND ".join(where_clauses)
 
+        # Guard against any session-level SQL Server row cap (e.g., ROWCOUNT 100)
+        # that can silently truncate results even when no TOP/LIMIT is used.
+        db.execute(text("SET ROWCOUNT 0"))
+
         query = text(
             f"""
-            SELECT TOP 100
+            SELECT
                 co.CSOID,
                 co.CustOrderNumber,
                 co.TaxAmount,

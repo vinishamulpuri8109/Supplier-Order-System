@@ -380,6 +380,16 @@ export default function DashboardPage({ userEmail, onLogout }) {
     setOrdersError('');
     setSuccessMessage('');
 
+    if (orderFilterType === 'custom') {
+      const hasStartDate = Boolean(String(orderFilterStartDate || '').trim());
+      const hasEndDate = Boolean(String(orderFilterEndDate || '').trim());
+      if ((hasStartDate && !hasEndDate) || (!hasStartDate && hasEndDate)) {
+        setOrdersError('Please enter both start date and end date for date range filtering.');
+        setOrdersLoading(false);
+        return;
+      }
+    }
+
     try {
       const results = await searchOrders({
         orderRef: csoidSearchValue,

@@ -162,8 +162,11 @@ export default function OrderSearchCard({
 
       {error ? <p className="status-text error-text">{error}</p> : null}
       {loading ? <p className="status-text">Loading customer orders...</p> : null}
+      {!loading && !error && orders.length > 0 ? (
+        <p className="status-text">Showing {orders.length} order(s).</p>
+      ) : null}
 
-      <div className="table-scroll">
+      <div className="table-scroll order-table-scroll">
         <table className="data-table">
           <thead>
             <tr>
