@@ -113,6 +113,18 @@ h1 {
   width: min(980px, 100%);
 }
 
+.po-filter-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.quick-po-clear {
+  white-space: nowrap;
+}
+
 .quick-filter-tabs {
   grid-column: 1 / -1;
   display: flex;
@@ -138,9 +150,15 @@ h1 {
 .quick-filter-range-row {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) auto minmax(140px, 1fr) auto;
+  grid-template-columns: auto minmax(140px, 1fr) auto minmax(140px, 1fr) auto;
   align-items: center;
   gap: 0.45rem;
+}
+
+.quick-filter-range-label {
+  font-size: 0.85rem;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .quick-filter-arrow {
@@ -568,6 +586,10 @@ small.error-text {
 
   .quick-filter-range-row {
     grid-template-columns: 1fr auto 1fr;
+  }
+
+  .quick-filter-range-label {
+    grid-column: 1 / -1;
   }
 
   .quick-filter-clear {

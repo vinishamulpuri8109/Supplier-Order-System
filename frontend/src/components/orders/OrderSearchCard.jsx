@@ -92,26 +92,43 @@ export default function OrderSearchCard({
       <div className="panel-head">
         <h3>CustomerOrders</h3>
         <form className="search-form" onSubmit={onSearchSubmit}>
-          <input
-            type="text"
-            value={csoidSearchValue}
-            onChange={(event) => onCsoidSearchValueChange(event.target.value)}
-            placeholder="Search by PO"
-            aria-label="Search by PO"
-          />
+          <div className="po-filter-row">
+            <input
+              type="text"
+              value={csoidSearchValue}
+              onChange={(event) => onCsoidSearchValueChange(event.target.value)}
+              placeholder="Enter PO"
+              aria-label="Enter PO"
+            />
+            <button
+              type="button"
+              className="ghost quick-po-clear"
+              onClick={() => onCsoidSearchValueChange('')}
+              disabled={!csoidSearchValue.trim()}
+            >
+              clear PO
+            </button>
+          </div>
           <div className="quick-filter-tabs" role="group" aria-label="Quick date filters">
             {datePresets.map((preset) => (
               <button
                 key={preset.value}
                 type="button"
                 className={`quick-filter-tab ${filterType === preset.value ? 'active' : ''}`}
-                onClick={() => onFilterTypeChange(preset.value)}
+                onClick={() => {
+                  if (filterType === preset.value) {
+                    onClearDateFilter();
+                    return;
+                  }
+                  onFilterTypeChange(preset.value);
+                }}
               >
                 {preset.label}
               </button>
             ))}
           </div>
           <div className="quick-filter-range-row">
+            <span className="quick-filter-range-label">Filter by date</span>
             <input
               type="date"
               value={filterStartDate}
@@ -119,7 +136,8 @@ export default function OrderSearchCard({
                 onFilterTypeChange('custom');
                 onFilterStartDateChange(event.target.value);
               }}
-              aria-label="Order filter start date"
+              aria-label="Filter by date start"
+              title="Filter by date (start)"
             />
             <span className="quick-filter-arrow" aria-hidden="true">{'->'}</span>
             <input
@@ -129,7 +147,8 @@ export default function OrderSearchCard({
                 onFilterTypeChange('custom');
                 onFilterEndDateChange(event.target.value);
               }}
-              aria-label="Order filter end date"
+              aria-label="Filter by date end"
+              title="Filter by date (end)"
             />
             <button type="button" className="ghost quick-filter-clear" onClick={onClearDateFilter}>
               clear

@@ -122,6 +122,31 @@ function buildLocalSupplierOrders(csoid, assignments) {
   });
 }
 
+function resolveWebsiteFromOrders(orders = []) {
+  const vendorCounts = {};
+  for (const order of orders || []) {
+    const vendor = String(order?.vendor_name || '').trim();
+    if (!vendor || vendor.toLowerCase() === 'none') {
+      continue;
+    }
+    vendorCounts[vendor] = (vendorCounts[vendor] || 0) + 1;
+  }
+
+  let bestWebsite = '';
+  let bestScore = 0;
+
+  for (const website of WEBSITE_OPTIONS) {
+    const websiteVendors = WEBSITE_VENDOR_MAP[website] || [];
+    const score = websiteVendors.reduce((acc, vendor) => acc + (vendorCounts[vendor] || 0), 0);
+    if (score > bestScore) {
+      bestScore = score;
+      bestWebsite = website;
+    }
+  }
+
+  return bestWebsite;
+}
+
 export default function DashboardPage({ userEmail, onLogout }) {
   const [csoidSearchValue, setCsoidSearchValue] = useState('');
   const [orderFilterType, setOrderFilterType] = useState('');
@@ -132,6 +157,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
   const [items, setItems] = useState([]);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [selectedWebsite, setSelectedWebsite] = useState('');
+  const [websiteLoading, setWebsiteLoading] = useState(false);
 
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [itemsLoading, setItemsLoading] = useState(false);
@@ -322,6 +348,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
 
     setItemsLoading(true);
     setAssignmentsLoading(true);
+    setWebsiteLoading(true);
     setItemsError('');
     setSupplierError('');
     setSuccessMessage('');
@@ -333,13 +360,16 @@ export default function DashboardPage({ userEmail, onLogout }) {
       setItems(fetchedItems);
       const loadedOrders = await supplierOrdersPromise;
       initializeAssignments(fetchedItems, loadedOrders, order);
+      setSelectedWebsite(resolveWebsiteFromOrders(loadedOrders));
     } catch (error) {
       setItems([]);
       setSkuAssignments({});
       setItemsError(error.message || 'Unable to load order items');
       setSupplierOrders([]);
       setSupplierFinancialDrafts({});
+      setSelectedWebsite('');
     } finally {
+      setWebsiteLoading(false);
       setAssignmentsLoading(false);
       setItemsLoading(false);
     }
@@ -1101,7 +1131,12 @@ export default function DashboardPage({ userEmail, onLogout }) {
             <div className="assignment-controls">
               <label>
                 Website
-                <select value={selectedWebsite} onChange={(event) => setSelectedWebsite(event.target.value)}>
+                <select
+                  value={websiteLoading ? '__loading__' : selectedWebsite}
+                  disabled={websiteLoading}
+                  onChange={(event) => setSelectedWebsite(event.target.value)}
+                >
+                  <option value="__loading__" disabled>Loading website...</option>
                   <option value="">Select website</option>
                   {WEBSITE_OPTIONS.map((website) => (
                     <option key={website} value={website}>{website}</option>
