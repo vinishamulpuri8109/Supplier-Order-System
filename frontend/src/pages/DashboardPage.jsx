@@ -125,8 +125,8 @@ function buildLocalSupplierOrders(csoid, assignments) {
 export default function DashboardPage({ userEmail, onLogout }) {
   const [csoidSearchValue, setCsoidSearchValue] = useState('');
   const [orderFilterType, setOrderFilterType] = useState('');
-  const [orderFilterStartDate, setOrderFilterStartDate] = useState(todayAsInputDate());
-  const [orderFilterEndDate, setOrderFilterEndDate] = useState(todayAsInputDate());
+  const [orderFilterStartDate, setOrderFilterStartDate] = useState('');
+  const [orderFilterEndDate, setOrderFilterEndDate] = useState('');
 
   const [orders, setOrders] = useState([]);
   const [items, setItems] = useState([]);
@@ -388,8 +388,8 @@ export default function DashboardPage({ userEmail, onLogout }) {
 
   const handleClearDateFilter = () => {
     setOrderFilterType('');
-    setOrderFilterStartDate(todayAsInputDate());
-    setOrderFilterEndDate(todayAsInputDate());
+    setOrderFilterStartDate('');
+    setOrderFilterEndDate('');
   };
 
   const handleAssignmentChange = (skuKey, field, value) => {
