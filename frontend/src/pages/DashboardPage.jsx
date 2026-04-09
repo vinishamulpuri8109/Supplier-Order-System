@@ -125,7 +125,6 @@ function buildLocalSupplierOrders(csoid, assignments) {
 export default function DashboardPage({ userEmail, onLogout }) {
   const [csoidSearchValue, setCsoidSearchValue] = useState('');
   const [orderFilterType, setOrderFilterType] = useState('');
-  const [orderFilterDate, setOrderFilterDate] = useState(todayAsInputDate());
   const [orderFilterStartDate, setOrderFilterStartDate] = useState(todayAsInputDate());
   const [orderFilterEndDate, setOrderFilterEndDate] = useState(todayAsInputDate());
 
@@ -348,15 +347,9 @@ export default function DashboardPage({ userEmail, onLogout }) {
     setSuccessMessage('');
 
     try {
-      const resolvedFilterDate =
-        orderFilterType === 'week'
-          ? weekInputToDate(orderFilterDate) || todayAsInputDate()
-          : orderFilterDate;
-
       const results = await searchOrders({
         orderRef: csoidSearchValue,
         filterType: orderFilterType,
-        filterDate: resolvedFilterDate,
         filterStartDate: orderFilterStartDate,
         filterEndDate: orderFilterEndDate,
       });
@@ -391,6 +384,12 @@ export default function DashboardPage({ userEmail, onLogout }) {
   const handleSelectOrder = (order) => {
     setSelectedOrder(order);
     loadOrderItems(order);
+  };
+
+  const handleClearDateFilter = () => {
+    setOrderFilterType('');
+    setOrderFilterStartDate(todayAsInputDate());
+    setOrderFilterEndDate(todayAsInputDate());
   };
 
   const handleAssignmentChange = (skuKey, field, value) => {
@@ -1063,12 +1062,11 @@ export default function DashboardPage({ userEmail, onLogout }) {
             onCsoidSearchValueChange={setCsoidSearchValue}
             filterType={orderFilterType}
             onFilterTypeChange={setOrderFilterType}
-            filterDate={orderFilterDate}
-            onFilterDateChange={setOrderFilterDate}
             filterStartDate={orderFilterStartDate}
             filterEndDate={orderFilterEndDate}
             onFilterStartDateChange={setOrderFilterStartDate}
             onFilterEndDateChange={setOrderFilterEndDate}
+            onClearDateFilter={handleClearDateFilter}
             onSearch={handleSearch}
             orders={orders}
             loading={ordersLoading}

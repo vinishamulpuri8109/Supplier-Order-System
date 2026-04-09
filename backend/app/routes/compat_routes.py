@@ -54,7 +54,7 @@ def search_orders(
     filterEndDate: str = "",
     db: Session = Depends(get_db),
 ):
-    """Search orders by text and optional day/week/range OrderedDate filter."""
+    """Search orders by text and optional preset/custom OrderedDate filter."""
     try:
         where_clauses = []
         query_params = {}
@@ -94,27 +94,40 @@ def search_orders(
         cleaned_filter_type = filterType.strip().lower()
         cleaned_filter_date = filterDate.strip()
 
-        if cleaned_filter_type and cleaned_filter_type not in {"day", "week", "range"}:
+        if cleaned_filter_type and cleaned_filter_type not in {
+            "day",
+            "week",
+            "range",
+            "custom",
+            "today",
+            "yesterday",
+            "this_week",
+            "last_week",
+            "this_month",
+        }:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="filterType must be 'day', 'week', or 'range'",
+                detail=(
+                    "filterType must be one of 'day', 'week', 'range', 'custom', "
+                    "'today', 'yesterday', 'this_week', 'last_week', or 'this_month'"
+                ),
             )
 
-        if cleaned_filter_type == "range":
+        if cleaned_filter_type in {"range", "custom"}:
             cleaned_start_date = filterStartDate.strip()
             cleaned_end_date = filterEndDate.strip()
             if not cleaned_start_date or not cleaned_end_date:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="filterStartDate and filterEndDate are required when filterType is 'range'",
+                    detail="filterStartDate and filterEndDate are required when filterType is 'custom'",
                 )
-        elif cleaned_filter_type and not cleaned_filter_date:
+        elif cleaned_filter_type in {"day", "week"} and not cleaned_filter_date:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="filterDate is required when filterType is provided",
             )
 
-        if cleaned_filter_type == "range":
+        if cleaned_filter_type in {"range", "custom"}:
             try:
                 parsed_start = datetime.strptime(filterStartDate.strip(), "%Y-%m-%d").date()
                 parsed_end = datetime.strptime(filterEndDate.strip(), "%Y-%m-%d").date()
@@ -135,7 +148,7 @@ def search_orders(
             where_clauses.append("co.OrderedDate < :range_end")
             query_params["range_start"] = parsed_start
             query_params["range_end"] = range_end
-        elif cleaned_filter_type:
+        elif cleaned_filter_type in {"day", "week"}:
             try:
                 parsed_date = datetime.strptime(cleaned_filter_date, "%Y-%m-%d").date()
             except ValueError as exc:
@@ -154,6 +167,33 @@ def search_orders(
                 where_clauses.append("co.OrderedDate < :week_end")
                 query_params["week_start"] = week_start
                 query_params["week_end"] = week_end
+        elif cleaned_filter_type:
+            today = datetime.utcnow().date()
+
+            if cleaned_filter_type == "today":
+                range_start = today
+                range_end = today + timedelta(days=1)
+            elif cleaned_filter_type == "yesterday":
+                range_start = today - timedelta(days=1)
+                range_end = today
+            elif cleaned_filter_type == "this_week":
+                range_start = today - timedelta(days=today.weekday())
+                range_end = range_start + timedelta(days=7)
+            elif cleaned_filter_type == "last_week":
+                this_week_start = today - timedelta(days=today.weekday())
+                range_start = this_week_start - timedelta(days=7)
+                range_end = this_week_start
+            else:  # this_month
+                range_start = today.replace(day=1)
+                if range_start.month == 12:
+                    range_end = range_start.replace(year=range_start.year + 1, month=1)
+                else:
+                    range_end = range_start.replace(month=range_start.month + 1)
+
+            where_clauses.append("co.OrderedDate >= :preset_start")
+            where_clauses.append("co.OrderedDate < :preset_end")
+            query_params["preset_start"] = range_start
+            query_params["preset_end"] = range_end
 
         where_sql = ""
         if where_clauses:

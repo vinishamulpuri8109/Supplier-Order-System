@@ -96,7 +96,6 @@ function normalizeItems(payload) {
 export async function searchOrders({
   orderRef,
   filterType,
-  filterDate,
   filterStartDate,
   filterEndDate,
 }) {
@@ -107,15 +106,14 @@ export async function searchOrders({
     params.set('orderRef', trimmedOrderRef);
   }
 
-  if (filterType === 'range') {
+  if (filterType === 'custom' || filterType === 'range') {
     if (filterStartDate && filterEndDate) {
-      params.set('filterType', filterType);
+      params.set('filterType', 'custom');
       params.set('filterStartDate', filterStartDate);
       params.set('filterEndDate', filterEndDate);
     }
-  } else if (filterType && filterDate) {
+  } else if (filterType) {
     params.set('filterType', filterType);
-    params.set('filterDate', filterDate);
   }
 
   const queryString = params.toString();

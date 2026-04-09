@@ -60,12 +60,11 @@ export default function OrderSearchCard({
   onCsoidSearchValueChange,
   filterType,
   onFilterTypeChange,
-  filterDate,
-  onFilterDateChange,
   filterStartDate,
   filterEndDate,
   onFilterStartDateChange,
   onFilterEndDateChange,
+  onClearDateFilter,
   onSearch,
   orders,
   loading,
@@ -73,6 +72,14 @@ export default function OrderSearchCard({
   selectedOrder,
   onSelectOrder,
 }) {
+  const datePresets = [
+    { label: 'Today', value: 'today' },
+    { label: 'Yesterday', value: 'yesterday' },
+    { label: 'This week', value: 'this_week' },
+    { label: 'Last week', value: 'last_week' },
+    { label: 'This month', value: 'this_month' },
+  ];
+
   const selectedId = getOrderRowId(selectedOrder || {});
 
   const onSearchSubmit = (event) => {
@@ -92,42 +99,42 @@ export default function OrderSearchCard({
             placeholder="Search by PO"
             aria-label="Search by PO"
           />
-          <select
-            value={filterType}
-            onChange={(event) => onFilterTypeChange(event.target.value)}
-            aria-label="Filter orders by day, week, or range"
-          >
-            <option value="">No date filter</option>
-            <option value="day">Day</option>
-            <option value="week">Week</option>
-            <option value="range">Range</option>
-          </select>
-          {filterType === 'range' ? (
-            <>
-              <input
-                type="date"
-                value={filterStartDate}
-                onChange={(event) => onFilterStartDateChange(event.target.value)}
-                disabled={!filterType}
-                aria-label="Order filter start date"
-              />
-              <input
-                type="date"
-                value={filterEndDate}
-                onChange={(event) => onFilterEndDateChange(event.target.value)}
-                disabled={!filterType}
-                aria-label="Order filter end date"
-              />
-            </>
-          ) : (
+          <div className="quick-filter-tabs" role="group" aria-label="Quick date filters">
+            {datePresets.map((preset) => (
+              <button
+                key={preset.value}
+                type="button"
+                className={`quick-filter-tab ${filterType === preset.value ? 'active' : ''}`}
+                onClick={() => onFilterTypeChange(preset.value)}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          <div className="quick-filter-range-row">
             <input
-              type={filterType === 'week' ? 'week' : 'date'}
-              value={filterDate}
-              onChange={(event) => onFilterDateChange(event.target.value)}
-              disabled={!filterType}
-              aria-label="Order filter date"
+              type="date"
+              value={filterStartDate}
+              onChange={(event) => {
+                onFilterTypeChange('custom');
+                onFilterStartDateChange(event.target.value);
+              }}
+              aria-label="Order filter start date"
             />
-          )}
+            <span className="quick-filter-arrow" aria-hidden="true">{'->'}</span>
+            <input
+              type="date"
+              value={filterEndDate}
+              onChange={(event) => {
+                onFilterTypeChange('custom');
+                onFilterEndDateChange(event.target.value);
+              }}
+              aria-label="Order filter end date"
+            />
+            <button type="button" className="ghost quick-filter-clear" onClick={onClearDateFilter}>
+              clear
+            </button>
+          </div>
           <button type="submit" disabled={loading}>
             {loading ? 'Searching...' : 'Search'}
           </button>
@@ -150,7 +157,7 @@ export default function OrderSearchCard({
             {!loading && orders.length === 0 ? (
               <tr>
                 <td colSpan={ORDER_COLUMNS.length} className="empty-cell">
-                  Search by PO, filter by day/week/range, or use both together.
+                  Search by PO and use quick date presets or a custom range.
                 </td>
               </tr>
             ) : null}
