@@ -243,6 +243,69 @@ def ensure_supplier_order_schema():
         "IF OBJECT_ID('supplier_order_items', 'U') IS NOT NULL UPDATE supplier_order_items SET availability_status = CASE WHEN availability_status IN ('available', 'draft') OR availability_status IS NULL THEN 'confirmed' WHEN availability_status = 'unavailable' THEN 'cancelled' ELSE LOWER(availability_status) END",
         "IF OBJECT_ID('supplier_order_items', 'U') IS NOT NULL AND COL_LENGTH('supplier_order_items', 'expected_date') IS NULL ALTER TABLE supplier_order_items ADD expected_date DATE NULL",
         "IF OBJECT_ID('supplier_order_items', 'U') IS NOT NULL AND COL_LENGTH('supplier_order_items', 'vendor_note') IS NULL ALTER TABLE supplier_order_items ADD vendor_note NVARCHAR(255) NULL",
+        "IF OBJECT_ID('CustomerOrders', 'U') IS NOT NULL AND COL_LENGTH('CustomerOrders', 'vendor_filled') IS NULL ALTER TABLE CustomerOrders ADD vendor_filled BIT NOT NULL CONSTRAINT df_customer_orders_vendor_filled DEFAULT (0)",
+        """
+        IF OBJECT_ID('website_mapping', 'U') IS NULL
+        BEGIN
+            CREATE TABLE website_mapping (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                prefix NVARCHAR(50) NOT NULL UNIQUE,
+                website_name NVARCHAR(255) NOT NULL
+            );
+        END
+        """,
+        """
+        MERGE website_mapping AS target
+        USING (
+            VALUES
+                ('HNC', 'Parts Hnc'),
+                ('HNK', 'Hnk Parts'),
+                ('FE', 'Parts FE'),
+                ('CEFE', 'PartsFE Canada'),
+                ('WTB', 'WholeToolBox'),
+                ('PM', 'Parts Melange')
+        ) AS source(prefix, website_name)
+        ON UPPER(target.prefix) = UPPER(source.prefix)
+        WHEN MATCHED THEN
+            UPDATE SET target.website_name = source.website_name
+        WHEN NOT MATCHED THEN
+            INSERT (prefix, website_name) VALUES (source.prefix, source.website_name);
+        """,
+        """
+        IF OBJECT_ID('website_vendor_mapping', 'U') IS NULL
+        BEGIN
+            CREATE TABLE website_vendor_mapping (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                website_name NVARCHAR(255) NOT NULL,
+                vendor_name NVARCHAR(255) NOT NULL,
+                CONSTRAINT uq_website_vendor_mapping UNIQUE (website_name, vendor_name)
+            );
+        END
+        """,
+        """
+        MERGE website_vendor_mapping AS target
+        USING (
+            VALUES
+                ('Parts FE', 'AllPoints'),
+                ('Parts FE', 'Encompass'),
+                ('PartsFE Canada', 'AllPoints'),
+                ('Parts Hnc', 'Neuco'),
+                ('Parts Hnc', 'MetroPAC'),
+                ('Parts Hnc', 'Encompass'),
+                ('Parts Hnc', 'AllPoints'),
+                ('Hnk Parts', 'Reliable Parts'),
+                ('Hnk Parts', 'Encompass'),
+                ('Hnk Parts', 'UED'),
+                ('Hnk Parts', 'Marcone'),
+                ('WholeToolBox', 'Encompass'),
+                ('Parts Melange', 'Encompass Canada'),
+                ('Parts Melange', 'Encompass')
+        ) AS source(website_name, vendor_name)
+        ON UPPER(target.website_name) = UPPER(source.website_name)
+           AND UPPER(target.vendor_name) = UPPER(source.vendor_name)
+        WHEN NOT MATCHED THEN
+            INSERT (website_name, vendor_name) VALUES (source.website_name, source.vendor_name);
+        """,
         "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ix_supplier_orders_csoid' AND object_id = OBJECT_ID('supplier_orders')) CREATE INDEX ix_supplier_orders_csoid ON supplier_orders(csoid)",
         "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ix_supplier_orders_cust_order_number' AND object_id = OBJECT_ID('supplier_orders')) CREATE INDEX ix_supplier_orders_cust_order_number ON supplier_orders(cust_order_number)",
         "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ix_supplier_order_items_soid' AND object_id = OBJECT_ID('supplier_order_items')) CREATE INDEX ix_supplier_order_items_soid ON supplier_order_items(soid)",

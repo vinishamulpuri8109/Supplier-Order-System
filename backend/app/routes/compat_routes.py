@@ -24,6 +24,35 @@ def _get_next_soid(db: Session) -> str:
     return str(get_next_soid(db))
 
 
+def _load_website_prefix_mappings(db: Session) -> list[tuple[str, str]]:
+    rows = db.execute(
+        text(
+            """
+            SELECT prefix, website_name
+            FROM website_mapping
+            ORDER BY LEN(prefix) DESC
+            """
+        )
+    ).fetchall()
+    return [(str(row[0] or "").upper(), str(row[1] or "Unknown")) for row in rows]
+
+
+def _detect_website_from_order_id(cust_order_number: str, prefix_rows: list[tuple[str, str]]) -> str:
+    """Resolve website using longest-prefix match from database rows."""
+    if not cust_order_number or not isinstance(cust_order_number, str):
+        return "Unknown"
+
+    order_id_upper = cust_order_number.strip().upper()
+    if not order_id_upper:
+        return "Unknown"
+
+    for prefix, website_name in prefix_rows:
+        if prefix and order_id_upper.startswith(prefix):
+            return website_name or "Unknown"
+
+    return "Unknown"
+
+
 @router.get("/supplier/soid-exists/{soid}")
 def soid_exists(soid: str, db: Session = Depends(get_db)):
     if not soid.isdigit():
@@ -40,6 +69,49 @@ def get_next_order_number(db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate order number: {str(exc)}",
+        )
+
+
+@router.get("/supplier/website-vendor-config")
+def get_website_vendor_config(db: Session = Depends(get_db)):
+    """Return website options and vendor options from SQL configuration tables."""
+    try:
+        website_rows = db.execute(
+            text(
+                """
+                SELECT DISTINCT website_name
+                FROM website_vendor_mapping
+                ORDER BY website_name ASC
+                """
+            )
+        ).fetchall()
+
+        vendor_rows = db.execute(
+            text(
+                """
+                SELECT website_name, vendor_name
+                FROM website_vendor_mapping
+                ORDER BY website_name ASC, vendor_name ASC
+                """
+            )
+        ).fetchall()
+
+        website_vendor_map: dict[str, list[str]] = {}
+        for row in vendor_rows:
+            website_name = str(row[0] or "").strip()
+            vendor_name = str(row[1] or "").strip()
+            if not website_name or not vendor_name:
+                continue
+            website_vendor_map.setdefault(website_name, []).append(vendor_name)
+
+        return {
+            "websiteOptions": [str(row[0]) for row in website_rows if row[0]],
+            "websiteVendorMap": website_vendor_map,
+        }
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load website vendor config: {str(exc)}",
         )
 
 
@@ -203,6 +275,9 @@ def search_orders(
         # that can silently truncate results even when no TOP/LIMIT is used.
         db.execute(text("SET ROWCOUNT 0"))
 
+        # When a time filter is applied, return oldest orders first.
+        order_by_sql = "co.OrderedDate ASC, co.CSOID ASC" if cleaned_filter_type else "co.CSOID DESC"
+
         query = text(
             f"""
             SELECT
@@ -221,10 +296,11 @@ def search_orders(
                 co.cid,
                 co.ReturnAmount,
                 co.PaymentMethod,
-                co.PaymentTransId
+                co.PaymentTransId,
+                ISNULL(co.vendor_filled, 0) as vendor_filled
             FROM CustomerOrders co
             {where_sql}
-            ORDER BY co.CSOID DESC
+            ORDER BY {order_by_sql}
             """
         )
 
@@ -236,10 +312,15 @@ def search_orders(
                 detail="No orders found for the provided CSOID/PO",
             )
 
-        return [
-            {
+        prefix_rows = _load_website_prefix_mappings(db)
+
+        result = []
+        for row in rows:
+            website = _detect_website_from_order_id(row[1], prefix_rows)
+            result.append({
                 "CSOID": row[0],
                 "CustOrderNumber": row[1],
+                "website": website,
                 "TaxAmount": row[2],
                 "ShippingCharge": row[3],
                 "Coupon": row[4],
@@ -254,9 +335,10 @@ def search_orders(
                 "ReturnAmount": row[13],
                 "PaymentMethod": row[14],
                 "PaymentTransId": row[15],
-            }
-            for row in rows
-        ]
+                "vendor_filled": bool(row[16]),
+                "vendor_filled_display": "Filled" if row[16] else "Not Filled",
+            })
+        return result
     except HTTPException:
         raise
     except Exception as exc:

@@ -4,12 +4,12 @@ import OrderItemsTable from '../components/orders/OrderItemsTable';
 import SupplierOrderCard from '../components/supplier/SupplierOrderCard';
 import BackorderWidget from '../components/supplier/BackorderWidget';
 import { useEffect, useMemo, useState } from 'react';
-import { WEBSITE_OPTIONS, WEBSITE_VENDOR_MAP } from '../constants/supplierOptions';
 import {
   createSupplierOrders,
   deleteSupplierOrdersByPo,
   fetchAllBackorderedOrders,
   fetchOrderItems,
+  fetchWebsiteVendorConfig,
   fetchSupplierOrders,
   searchOrders,
   updateSupplierOrder,
@@ -52,6 +52,22 @@ function getItemKey(item) {
 
 function getOrderKey(order) {
   return String(order?.soid ?? order?.draft_id ?? order?.vendor_name ?? '');
+}
+
+function getMergedOrderDraft(order, drafts) {
+  const orderKey = getOrderKey(order);
+  const rawDraft = drafts[orderKey] || {};
+  return {
+    vendor_name: rawDraft.vendor_name ?? (order?.vendor_name || 'None'),
+    vendor_website_order_date: rawDraft.vendor_website_order_date ?? (order?.vendor_website_order_date || ''),
+    vendor_website_order_number: rawDraft.vendor_website_order_number ?? (order?.vendor_website_order_number || ''),
+    status: rawDraft.status ?? (order?.status || 'confirmed'),
+    tax_total: rawDraft.tax_total ?? formatMoney(order?.tax_total),
+    shipping_total: rawDraft.shipping_total ?? formatMoney(order?.shipping_total),
+    discount_total: rawDraft.discount_total ?? formatMoney(order?.discount_total),
+    refund_total: rawDraft.refund_total ?? formatMoney(order?.refund_total),
+    comments: rawDraft.comments ?? (order?.comments || ''),
+  };
 }
 
 function resolveItemField(item, candidates) {
@@ -122,7 +138,7 @@ function buildLocalSupplierOrders(csoid, assignments) {
   });
 }
 
-function resolveWebsiteFromOrders(orders = []) {
+function resolveWebsiteFromOrders(orders = [], websiteVendorMap = {}) {
   const vendorCounts = {};
   for (const order of orders || []) {
     const vendor = String(order?.vendor_name || '').trim();
@@ -132,11 +148,12 @@ function resolveWebsiteFromOrders(orders = []) {
     vendorCounts[vendor] = (vendorCounts[vendor] || 0) + 1;
   }
 
+  const websiteOptions = Object.keys(websiteVendorMap || {});
   let bestWebsite = '';
   let bestScore = 0;
 
-  for (const website of WEBSITE_OPTIONS) {
-    const websiteVendors = WEBSITE_VENDOR_MAP[website] || [];
+  for (const website of websiteOptions) {
+    const websiteVendors = websiteVendorMap[website] || [];
     const score = websiteVendors.reduce((acc, vendor) => acc + (vendorCounts[vendor] || 0), 0);
     if (score > bestScore) {
       bestScore = score;
@@ -157,6 +174,9 @@ export default function DashboardPage({ userEmail, onLogout }) {
   const [items, setItems] = useState([]);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [selectedWebsite, setSelectedWebsite] = useState('');
+  const [websiteOptions, setWebsiteOptions] = useState([]);
+  const [websiteVendorMap, setWebsiteVendorMap] = useState({});
+  const [websiteConfigLoading, setWebsiteConfigLoading] = useState(true);
   const [websiteLoading, setWebsiteLoading] = useState(false);
 
   const [ordersLoading, setOrdersLoading] = useState(false);
@@ -185,7 +205,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
   const [orderEditSnapshots, setOrderEditSnapshots] = useState({});
   const vendorOptions = useMemo(() => {
     // Get vendors from selected website (primary source)
-    const fromWebsite = selectedWebsite ? (WEBSITE_VENDOR_MAP[selectedWebsite] || []) : [];
+    const fromWebsite = selectedWebsite ? (websiteVendorMap[selectedWebsite] || []) : [];
     
     // Get vendors from current assignments (secondary source - custom vendors)
     const fromAssignments = Object.values(skuAssignments)
@@ -202,7 +222,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
     
     // Always include 'None' as the first option
     return ['None', ...combined];
-  }, [selectedWebsite, skuAssignments, supplierOrders]);
+  }, [selectedWebsite, skuAssignments, supplierOrders, websiteVendorMap]);
 
   const filteredSupplierOrders = useMemo(() => {
     if (supplierStatusFilter === 'backordered') {
@@ -263,6 +283,38 @@ export default function DashboardPage({ userEmail, onLogout }) {
 
   useEffect(() => {
     refreshGlobalBackorderedCount();
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const loadWebsiteVendorConfig = async () => {
+      setWebsiteConfigLoading(true);
+      try {
+        const config = await fetchWebsiteVendorConfig();
+        if (isCancelled) {
+          return;
+        }
+        setWebsiteOptions(config.websiteOptions || []);
+        setWebsiteVendorMap(config.websiteVendorMap || {});
+      } catch {
+        if (isCancelled) {
+          return;
+        }
+        setWebsiteOptions([]);
+        setWebsiteVendorMap({});
+      } finally {
+        if (!isCancelled) {
+          setWebsiteConfigLoading(false);
+        }
+      }
+    };
+
+    loadWebsiteVendorConfig();
+
+    return () => {
+      isCancelled = true;
+    };
   }, []);
 
   const initializeAssignments = (fetchedItems, existingOrders = [], orderContext = selectedOrder) => {
@@ -360,7 +412,12 @@ export default function DashboardPage({ userEmail, onLogout }) {
       setItems(fetchedItems);
       const loadedOrders = await supplierOrdersPromise;
       initializeAssignments(fetchedItems, loadedOrders, order);
-      setSelectedWebsite(resolveWebsiteFromOrders(loadedOrders));
+      const mappedWebsite = String(order?.website || '').trim();
+      if (mappedWebsite && mappedWebsite.toLowerCase() !== 'unknown') {
+        setSelectedWebsite(mappedWebsite);
+      } else {
+        setSelectedWebsite(resolveWebsiteFromOrders(loadedOrders, websiteVendorMap));
+      }
     } catch (error) {
       setItems([]);
       setSkuAssignments({});
@@ -429,6 +486,16 @@ export default function DashboardPage({ userEmail, onLogout }) {
     setSelectedOrder(order);
     loadOrderItems(order);
   };
+
+  useEffect(() => {
+    if (selectedWebsite || supplierOrders.length === 0) {
+      return;
+    }
+    const resolved = resolveWebsiteFromOrders(supplierOrders, websiteVendorMap);
+    if (resolved) {
+      setSelectedWebsite(resolved);
+    }
+  }, [selectedWebsite, supplierOrders, websiteVendorMap]);
 
   const handleClearDateFilter = () => {
     setOrderFilterType('');
@@ -637,16 +704,17 @@ export default function DashboardPage({ userEmail, onLogout }) {
     }
     setSupplierFinancialDrafts((prev) => {
       const orderKey = String(soid);
+      const persistedOrder = supplierOrders.find((order) => getOrderKey(order) === orderKey);
       const current = prev[orderKey] || {
-        vendor_name: 'None',
-        vendor_website_order_date: '',
-        vendor_website_order_number: '',
-        status: 'confirmed',
-        tax_total: '0.00',
-        shipping_total: '0.00',
-        discount_total: '0.00',
-        refund_total: '0.00',
-        comments: '',
+        vendor_name: persistedOrder?.vendor_name || 'None',
+        vendor_website_order_date: persistedOrder?.vendor_website_order_date || '',
+        vendor_website_order_number: persistedOrder?.vendor_website_order_number || '',
+        status: persistedOrder?.status || 'confirmed',
+        tax_total: formatMoney(persistedOrder?.tax_total),
+        shipping_total: formatMoney(persistedOrder?.shipping_total),
+        discount_total: formatMoney(persistedOrder?.discount_total),
+        refund_total: formatMoney(persistedOrder?.refund_total),
+        comments: persistedOrder?.comments || '',
       };
 
       if (field === 'comments' || field === 'vendor_website_order_date' || field === 'vendor_website_order_number' || field === 'status' || field === 'vendor_name') {
@@ -683,6 +751,10 @@ export default function DashboardPage({ userEmail, onLogout }) {
   };
 
   const handleOrderItemChange = (soid, itemSku, field, value) => {
+    if (field === 'quantity') {
+      return;
+    }
+
     setSupplierOrders((prev) => prev.map((order) => {
       if (getOrderKey(order) !== String(soid)) {
         return order;
@@ -720,9 +792,9 @@ export default function DashboardPage({ userEmail, onLogout }) {
   const getGrandTotalPreview = (order) => {
     const draft = supplierFinancialDrafts[getOrderKey(order)] || {};
     const subtotal = roundToTwo(order.subtotal || 0);
-    const tax = roundToTwo(draft.tax_total || 0);
-    const shipping = roundToTwo(draft.shipping_total || 0);
-    const discount = roundToTwo(draft.discount_total || 0);
+    const tax = roundToTwo(draft.tax_total ?? order.tax_total ?? 0);
+    const shipping = roundToTwo(draft.shipping_total ?? order.shipping_total ?? 0);
+    const discount = roundToTwo(draft.discount_total ?? order.discount_total ?? 0);
     return roundToTwo(subtotal + tax + shipping - discount);
   };
 
@@ -792,7 +864,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
   };
 
   const validateSingleSupplierOrder = (order) => {
-    const draft = supplierFinancialDrafts[getOrderKey(order)] || {};
+    const draft = getMergedOrderDraft(order, supplierFinancialDrafts);
     const normalizedVendor = String(draft.vendor_name || order.vendor_name || '').trim() || 'None';
     const normalizedStatus = String(draft.status || order.status || 'confirmed').toLowerCase();
     const isVendorSelected = normalizedVendor.toLowerCase() !== 'none';
@@ -825,7 +897,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
 
     const moneyFields = ['tax_total', 'shipping_total', 'discount_total', 'refund_total'];
     for (const field of moneyFields) {
-      const raw = String(draft[field] ?? '0.00');
+      const raw = String(draft[field] ?? formatMoney(order[field]));
       if (!MONEY_INPUT_REGEX.test(raw)) {
         return `SOID ${order.soid}: ${field} must have at most 2 decimals`;
       }
@@ -842,7 +914,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
   };
 
   const buildOrderPayload = (order) => {
-    const draft = supplierFinancialDrafts[order.soid] || {};
+    const draft = getMergedOrderDraft(order, supplierFinancialDrafts);
     const normalizedVendor = String(draft.vendor_name || order.vendor_name || 'None').trim() || 'None';
     const normalizedStatus = String(draft.status || order.status || 'confirmed').toLowerCase();
     return {
@@ -855,10 +927,10 @@ export default function DashboardPage({ userEmail, onLogout }) {
       vendor_website_order_number: (draft.vendor_website_order_number || '').trim(),
       comments: (draft.comments || '').trim(),
       subtotal: roundToTwo(order.subtotal || 0),
-      tax_total: roundToTwo(draft.tax_total || 0),
-      shipping_total: roundToTwo(draft.shipping_total || 0),
-      discount_total: roundToTwo(draft.discount_total || 0),
-      refund_total: roundToTwo(draft.refund_total || 0),
+      tax_total: roundToTwo(draft.tax_total ?? order.tax_total ?? 0),
+      shipping_total: roundToTwo(draft.shipping_total ?? order.shipping_total ?? 0),
+      discount_total: roundToTwo(draft.discount_total ?? order.discount_total ?? 0),
+      refund_total: roundToTwo(draft.refund_total ?? order.refund_total ?? 0),
       grand_total: getGrandTotalPreview(order),
       items: (order.items || []).map((item) => ({
         sku: item.sku,
@@ -937,12 +1009,6 @@ export default function DashboardPage({ userEmail, onLogout }) {
         return next;
       });
       
-      // Clear the draft for this order
-      setSupplierFinancialDrafts((prev) => {
-        const next = { ...prev };
-        delete next[orderKey];
-        return next;
-      });
     } catch (error) {
       setOrderMessages((prev) => ({
         ...prev,
@@ -966,7 +1032,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
     const orderValidationErrors = [];
 
     for (const order of supplierOrders) {
-      const draft = supplierFinancialDrafts[getOrderKey(order)] || {};
+      const draft = getMergedOrderDraft(order, supplierFinancialDrafts);
       const normalizedVendor = String(draft.vendor_name || order.vendor_name || '').trim() || 'None';
       const normalizedStatus = String(draft.status || order.status || 'confirmed').toLowerCase();
 
@@ -985,7 +1051,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
 
       const moneyFields = ['tax_total', 'shipping_total', 'discount_total', 'refund_total'];
       for (const field of moneyFields) {
-        const raw = String(draft[field] ?? '0.00');
+        const raw = String(draft[field] ?? formatMoney(order[field]));
         if (!MONEY_INPUT_REGEX.test(raw)) {
           orderValidationErrors.push(`SOID ${order.soid}: ${field} must have at most 2 decimals`);
           continue;
@@ -1009,7 +1075,7 @@ export default function DashboardPage({ userEmail, onLogout }) {
     const payload = {
       csoid,
       supplier_orders: supplierOrders.map((order) => {
-        const draft = supplierFinancialDrafts[order.soid] || {};
+        const draft = getMergedOrderDraft(order, supplierFinancialDrafts);
         const normalizedVendor = String(draft.vendor_name || order.vendor_name || 'None').trim() || 'None';
         const normalizedStatus = String(draft.status || order.status || 'confirmed').toLowerCase();
         return {
@@ -1022,10 +1088,10 @@ export default function DashboardPage({ userEmail, onLogout }) {
           vendor_website_order_number: (draft.vendor_website_order_number || '').trim(),
           comments: (draft.comments || '').trim(),
           subtotal: roundToTwo(order.subtotal || 0),
-          tax_total: roundToTwo(draft.tax_total || 0),
-          shipping_total: roundToTwo(draft.shipping_total || 0),
-          discount_total: roundToTwo(draft.discount_total || 0),
-          refund_total: roundToTwo(draft.refund_total || 0),
+          tax_total: roundToTwo(draft.tax_total ?? order.tax_total ?? 0),
+          shipping_total: roundToTwo(draft.shipping_total ?? order.shipping_total ?? 0),
+          discount_total: roundToTwo(draft.discount_total ?? order.discount_total ?? 0),
+          refund_total: roundToTwo(draft.refund_total ?? order.refund_total ?? 0),
           grand_total: getGrandTotalPreview(order),
           items: (order.items || []).map((item) => ({
             sku: item.sku,
@@ -1142,13 +1208,13 @@ export default function DashboardPage({ userEmail, onLogout }) {
               <label>
                 Website
                 <select
-                  value={websiteLoading ? '__loading__' : selectedWebsite}
-                  disabled={websiteLoading}
+                  value={websiteLoading || websiteConfigLoading ? '__loading__' : selectedWebsite}
+                  disabled={websiteLoading || websiteConfigLoading}
                   onChange={(event) => setSelectedWebsite(event.target.value)}
                 >
                   <option value="__loading__" disabled>Loading website...</option>
                   <option value="">Select website</option>
-                  {WEBSITE_OPTIONS.map((website) => (
+                  {websiteOptions.map((website) => (
                     <option key={website} value={website}>{website}</option>
                   ))}
                 </select>

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import HTTPException, status
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.models.models import SupplierOrder, SupplierOrderItem
@@ -97,9 +97,8 @@ def _calculate_grand_total(
     tax_total: Decimal,
     shipping_total: Decimal,
     discount_total: Decimal,
-    refund_total: Decimal,
 ) -> Decimal:
-    grand_total = subtotal + tax_total + shipping_total - discount_total - refund_total
+    grand_total = subtotal + tax_total + shipping_total - discount_total
     return grand_total.quantize(TWOPLACES, rounding=ROUND_HALF_UP)
 
 
@@ -113,13 +112,12 @@ def _refresh_order_totals(order: SupplierOrder) -> MoneyTotals:
     if discount_total > subtotal:
         raise HTTPException(status_code=400, detail="discount_total cannot exceed subtotal")
 
-    grand_total = _calculate_grand_total(subtotal, tax_total, shipping_total, discount_total, refund_total)
+    grand_total = _calculate_grand_total(subtotal, tax_total, shipping_total, discount_total)
 
     order.subtotal = subtotal
     order.tax_total = tax_total
     order.shipping_total = shipping_total
     order.discount_total = discount_total
-    order.refund_total = refund_total
     order.grand_total = grand_total
     order.updated_at = datetime.utcnow()
 
@@ -301,6 +299,17 @@ def create_supplier_orders(
 
     db.commit()
 
+    # Update vendor_filled status for this CSOID in CustomerOrders table
+    try:
+        db.execute(
+            text("UPDATE CustomerOrders SET vendor_filled = 1 WHERE CSOID = :csoid"),
+            {"csoid": csoid}
+        )
+        db.commit()
+    except Exception:
+        # If CustomerOrders table doesn't exist or update fails, continue gracefully
+        pass
+
     for order in created_orders:
         db.refresh(order)
 
@@ -443,21 +452,6 @@ def delete_supplier_orders_by_po(db: Session, csoid: int, cust_order_number: str
             "deleted_soid_count": 0,
             "deleted_item_count": 0,
         }
-
-    finalized_statuses = {"confirmed", "cancelled", "returned"}
-    blocked = [
-        order.soid
-        for order in orders
-        if str(order.status or "").strip().lower() in finalized_statuses
-    ]
-    if blocked:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Cannot delete assignments for this PO because one or more SOIDs are finalized "
-                "(confirmed/cancelled/returned)."
-            ),
-        )
 
     deleted_item_count = sum(len(order.items or []) for order in orders)
     deleted_soid_count = len(orders)

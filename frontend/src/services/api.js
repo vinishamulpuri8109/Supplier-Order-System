@@ -128,6 +128,14 @@ export async function fetchOrderItems(csoid) {
   return normalizeItems(data);
 }
 
+export async function fetchWebsiteVendorConfig() {
+  const data = await fetchWithFallback(['/supplier/website-vendor-config']);
+  return {
+    websiteOptions: Array.isArray(data?.websiteOptions) ? data.websiteOptions : [],
+    websiteVendorMap: data?.websiteVendorMap && typeof data.websiteVendorMap === 'object' ? data.websiteVendorMap : {},
+  };
+}
+
 export async function fetchNextOrderNumber() {
   const data = await fetchWithFallback(['/supplier/orders/next-order-number']);
   if (!data?.orderNumber) {

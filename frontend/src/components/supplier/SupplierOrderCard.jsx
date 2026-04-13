@@ -104,8 +104,8 @@ export default function SupplierOrderCard({
                 type="number"
                 min="1"
                 value={item.quantity}
-                disabled={isReadOnly}
-                onChange={(event) => onItemChange(orderKey, item.sku, 'quantity', event.target.value)}
+                disabled={true}
+                readOnly
               />
             </label>
             <label>
